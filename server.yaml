@@ -1,0 +1,29 @@
+server:
+  name: "api" # 服务名称
+  grpc_service:
+    host: localhost
+    port: 8081
+  http_service:
+    host: localhost
+    port: 8080
+
+log:
+  log_level: "debug" # 日志级别（debug, info, warn, error）
+  filename: "./logs/server.log" # 日志文件路径
+  max_size: 100 # 文件最大尺寸（以MB为单位）
+  max_backups: 3 # 保留的最大旧文件数量
+  max_age: 30 # 保留旧文件的最大天数
+  compress: true # 是否压缩/归档旧文件
+  local_time: true # 使用本地时间创建时间戳
+
+db:
+  driver_name: "mysql"  # 驱动名称,如：mysql、mssql等，参见 https://github.com/xormplus/xorm/blob/master/dialects/dialect.go#L196
+  data_source_name: "user:password@tcp(localhost:3306)/dmp?parseTime=true" # 数据源名称，格式为 "user:password@tcp(host:port)/dbname?parseTime=true"
+  max_idle_conns: 10 # 连接池中最大空闲连接数
+  max_open_conns: 100 # 连接池中最大打开连接数
+  conn_max_lifetime: 3600 # 连接最大生命周期（以秒为单位）
+
+trace:
+  exporter_endpoint: "localhost:4317" # OpenTelemetry Collector 的地址
+  sampler_type: "parentbased_traceidratio" # 采样器类型（如 parentbased_traceidratio）
+  sampler_arg: "0.1" # 采样器参数（如采样率）
