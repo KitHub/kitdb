@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	dbFileSuffix = ".db"
 )
 
+var lineBreak string
 var dbFileDao *DBFileDao
 var onceForDBFileDao sync.Once
 
@@ -28,6 +30,12 @@ type DBFileDao struct {
 
 func NewDBFileDao(ctx context.Context, dataDir string, shutdownComponent *component.ShutdownComponent) *DBFileDao {
 	onceForDBFileDao.Do(func() {
+		if runtime.GOOS == "windows" {
+			lineBreak = "\r\n"
+		} else {
+			lineBreak = "\n"
+		}
+
 		dbFileDao = &DBFileDao{
 			dataDir:           dataDir,
 			databasesMap:      &component.SyncMap[string, *entity.DatabaseEntity]{},
@@ -77,7 +85,7 @@ func (d *DBFileDao) AppendLine(ctx context.Context, dbName string, content strin
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
 		return fmt.Errorf("db not found: %s", dbName)
 	}
-	_, err := dbEntity.DBFile.WriteString(content)
+	_, err := dbEntity.DBFile.WriteString(content + lineBreak)
 	if err != nil {
 		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName))
 		return err
