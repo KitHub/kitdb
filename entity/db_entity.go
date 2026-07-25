@@ -1,6 +1,8 @@
 package entity
 
+import "os"
+
 type DatabaseEntity struct {
-	Name string
-	Desc string
+	Name   string
+	DBFile *os.File
 }

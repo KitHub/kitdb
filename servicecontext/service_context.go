@@ -2,6 +2,8 @@ package servicecontext
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -40,7 +42,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 			return
 		}
 
-		dataDir, innerErr := relToAbs(configEntity.DataConfig.Dir, 0)
+		dataDir, innerErr := prepareDir(ctx, configEntity.DataConfig.Dir)
 		if innerErr != nil {
 			slog.ErrorContext(ctx, "resolve data dir failed", slog.Any("error", innerErr))
 			err = innerErr
@@ -88,31 +90,70 @@ func GetServiceContext() *ServiceContext {
 	return gServiceCtx
 }
 
-// relToAbs 将相对路径转为绝对路径，可选基于程序目录/当前工作目录
-// baseMode: 0=当前工作目录  1=程序exe所在目录
-func relToAbs(relPath string, baseMode int) (string, error) {
-	var baseDir string
-	var err error
+func prepareDir(ctx context.Context, dirPath string) (string, error) {
+	var fullPath string
 
-	switch baseMode {
-	case 1:
+	isAbs := filepath.IsAbs(dirPath)
+	if !isAbs {
 		exePath, err := os.Executable()
 		if err != nil {
+			slog.ErrorContext(ctx, "cannot get current executale command", slog.Any("error", err))
 			return "", err
 		}
-		baseDir = filepath.Dir(exePath)
-	default:
-		baseDir, err = os.Getwd()
-		if err != nil {
-			return "", err
-		}
+		fullPath = filepath.Join(filepath.Dir(exePath), dirPath)
+	} else {
+		fullPath = dirPath
 	}
 
-	full := filepath.Join(baseDir, relPath)
-	// 解析软链接并清理
-	realPath, err := filepath.EvalSymlinks(full)
+	realPath, err := filepath.EvalSymlinks(fullPath)
 	if err != nil {
-		return filepath.Abs(full)
+		slog.ErrorContext(ctx, "eval symlinks failed", slog.Any("error", err))
+		return "", err
 	}
-	return filepath.Clean(realPath), nil
+
+	err = ensureDirExists(ctx, realPath, 0755)
+	return realPath, err
+}
+
+// ensureDirExists
+// 1. 路径不存在：递归创建多级目录
+// 2. 路径存在但不是目录：返回冲突错误
+// 3. 任意步骤权限不足：返回权限错误
+// 4. 其他系统错误原样返回
+func ensureDirExists(ctx context.Context, dirPath string, perm os.FileMode) error {
+	statInfo, err := os.Stat(dirPath)
+	if err != nil {
+		// 情况1：目录完全不存在 → 执行创建
+		if os.IsNotExist(err) {
+			errCreate := os.MkdirAll(dirPath, perm)
+			if errCreate != nil {
+				// 创建失败，判断是否权限问题
+				if os.IsPermission(errCreate) {
+					slog.ErrorContext(ctx, "permission error when creating path", slog.String("path", dirPath), slog.Any("error", errCreate))
+					return errors.New(fmt.Sprintf("permission error when creating path: %s", dirPath))
+				}
+				slog.ErrorContext(ctx, "creating path failed", slog.String("path", dirPath), slog.Any("error", errCreate))
+				return fmt.Errorf("mkdir all failed: %w", errCreate)
+			}
+			return nil
+		}
+
+		// 情况2：Stat 就权限不足（目录上层无访问权限）
+		if os.IsPermission(err) {
+			slog.ErrorContext(ctx, "permission error when accessing path", slog.String("path", dirPath), slog.Any("error", err))
+			return errors.New(fmt.Sprintf("permission error when accessing path: %s", dirPath))
+		}
+
+		// 情况3：其他未知错误（磁盘损坏、路径非法等）
+		slog.ErrorContext(ctx, "stat path failed", slog.String("dir", dirPath), slog.Any("error", err))
+		return fmt.Errorf("stat path failed: %w", err)
+	}
+
+	// 路径已存在，但不是文件夹（是文件/软链接）
+	if !statInfo.IsDir() {
+		slog.ErrorContext(ctx, "path existed, but not a dir", slog.String("dir", dirPath))
+		return errors.New(fmt.Sprintf("path existed, but not a dir: %s", dirPath))
+	}
+
+	return nil
 }
