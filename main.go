@@ -27,6 +27,7 @@ import (
 
 type ServerArgs struct {
 	ConfigFile string
+	DataDir    string
 }
 
 func main() {
@@ -53,7 +54,7 @@ func main() {
 		panic(err)
 	}
 
-    // init callbacks
+	// init callbacks
 	err = initServer(ctx, serviceContext.InitComponent.GetInitCallbacks(ctx))
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to init server", slog.String("error", err.Error()))
@@ -138,7 +139,6 @@ func initRpcServer(ctx context.Context, serverConfig *config.ServiceConfigEntity
 
 	return server, nil
 }
-
 
 // initHttpServer initializes the HTTP server and registers the http gateway.
 // The http gateway translates HTTP API into gRPC calls to the gRPC server.
@@ -249,7 +249,6 @@ func shutdownGracefully(ctx context.Context, shutdownCallbacks []component.Shutd
 
 	slog.InfoContext(ctx, "graceful shutdown done")
 }
-
 
 func initServer(ctx context.Context, initCallbacks []component.InitCallback) error {
 	slog.InfoContext(ctx, "start init callbacks")
