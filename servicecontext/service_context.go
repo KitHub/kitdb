@@ -52,7 +52,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 		cronComponent := component.NewCronConponent(ctx)
 		initComponent := component.NewInitComponent(ctx)
 		shutdownComponent := component.NewShutdownComponent(ctx)
-		dbFileDao := dao.NewDBFileDao(ctx, dataDir)
+		dbFileDao := dao.NewDBFileDao(ctx, dataDir, shutdownComponent)
 		demoLogic := logic.NewDemoLogic(ctx)
 		demoService := service.NewDemoService(ctx, demoLogic)
 

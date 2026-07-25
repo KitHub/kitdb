@@ -21,16 +21,26 @@ var dbFileDao *DBFileDao
 var onceForDBFileDao sync.Once
 
 type DBFileDao struct {
-	dataDir      string
-	databasesMap *component.SyncMap[string, *entity.DatabaseEntity] // key=dbname
+	dataDir           string
+	databasesMap      *component.SyncMap[string, *entity.DatabaseEntity] // key=dbname
+	shutdownComponent *component.ShutdownComponent
 }
 
-func NewDBFileDao(ctx context.Context, dataDir string) *DBFileDao {
+func NewDBFileDao(ctx context.Context, dataDir string, shutdownComponent *component.ShutdownComponent) *DBFileDao {
 	onceForDBFileDao.Do(func() {
 		dbFileDao = &DBFileDao{
-			dataDir:      dataDir,
-			databasesMap: &component.SyncMap[string, *entity.DatabaseEntity]{},
+			dataDir:           dataDir,
+			databasesMap:      &component.SyncMap[string, *entity.DatabaseEntity]{},
+			shutdownComponent: shutdownComponent,
 		}
+
+		dbFileDao.shutdownComponent.RegisterShutdownCallback(func(ctx context.Context) error {
+			dbNames := dbFileDao.databasesMap.Keys()
+			for _, dbName := range dbNames {
+				_ = dbFileDao.CloseDBFile(ctx, dbName)
+			}
+			return nil
+		})
 	})
 	return dbFileDao
 }
@@ -58,6 +68,34 @@ func (d *DBFileDao) CreateDBFile(ctx context.Context, dbName string) error {
 		return err
 	}
 
+	return nil
+}
+
+func (d *DBFileDao) AppendLine(ctx context.Context, dbName string, content string) error {
+	dbEntity, ok := d.databasesMap.Load(dbName)
+	if !ok {
+		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
+		return fmt.Errorf("db not found: %s", dbName)
+	}
+	_, err := dbEntity.DBFile.WriteString(content)
+	if err != nil {
+		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName))
+		return err
+	}
+	return nil
+}
+
+func (d *DBFileDao) CloseDBFile(ctx context.Context, dbName string) error {
+	dbEntity, ok := d.databasesMap.Load(dbName)
+	if !ok {
+		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
+		return fmt.Errorf("db not found: %s", dbName)
+	}
+	err := dbEntity.DBFile.Close()
+	if err != nil {
+		slog.ErrorContext(ctx, "close db file failed", slog.String("dbName", dbName), slog.Any("error", err))
+		return err
+	}
 	return nil
 }
 
