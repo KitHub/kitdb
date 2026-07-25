@@ -1,6 +1,6 @@
 package entity
 
-type DemoEntity struct {
-    ID   int    `json:"id"`
-    Name string `json:"name"`
+type DatabaseEntity struct {
+	Name string
+	Desc string
 }

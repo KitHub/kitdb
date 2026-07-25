@@ -3,22 +3,26 @@ package servicecontext
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/KitHub/kitdb/component"
 	"github.com/KitHub/kitdb/config"
+	"github.com/KitHub/kitdb/dao"
 	"github.com/KitHub/kitdb/logic"
 	"github.com/KitHub/kitdb/service"
-    "gopkg.in/natefinch/lumberjack.v2"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type ServiceContext struct {
-	Logger         *slog.Logger
-    CronComponent  *component.CronComponent
-    InitComponent  *component.InitComponent
-	ShutdownComponent  *component.ShutdownComponent
-	DemoLogic   *logic.DemoLogic
-	DemoService *service.DemoService
+	Logger            *slog.Logger
+	CronComponent     *component.CronComponent
+	InitComponent     *component.InitComponent
+	ShutdownComponent *component.ShutdownComponent
+	DBFileDao         *dao.DBFileDao
+	DemoLogic         *logic.DemoLogic
+	DemoService       *service.DemoService
 }
 
 var gServiceCtx *ServiceContext
@@ -36,19 +40,28 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 			return
 		}
 
-        cronComponent := component.NewCronConponent(ctx)
-        initComponent := component.NewInitComponent(ctx)
+		dataDir, innerErr := relToAbs(configEntity.DataConfig.Dir, 0)
+		if innerErr != nil {
+			slog.ErrorContext(ctx, "resolve data dir failed", slog.Any("error", innerErr))
+			err = innerErr
+			return
+		}
+
+		cronComponent := component.NewCronConponent(ctx)
+		initComponent := component.NewInitComponent(ctx)
 		shutdownComponent := component.NewShutdownComponent(ctx)
+		dbFileDao := dao.NewDBFileDao(ctx, dataDir)
 		demoLogic := logic.NewDemoLogic(ctx)
 		demoService := service.NewDemoService(ctx, demoLogic)
 
 		gServiceCtx = &ServiceContext{
 			ShutdownComponent: shutdownComponent,
-            InitComponent: initComponent,
-			DemoLogic:     demoLogic,
-			DemoService:   demoService,
-			Logger:        logger,
-            CronComponent:  cronComponent,
+			InitComponent:     initComponent,
+			Logger:            logger,
+			CronComponent:     cronComponent,
+			DBFileDao:         dbFileDao,
+			DemoLogic:         demoLogic,
+			DemoService:       demoService,
 		}
 	})
 
@@ -73,4 +86,33 @@ func initLog(ctx context.Context, logConfig *config.LogConfigEntity) (
 
 func GetServiceContext() *ServiceContext {
 	return gServiceCtx
+}
+
+// relToAbs 将相对路径转为绝对路径，可选基于程序目录/当前工作目录
+// baseMode: 0=当前工作目录  1=程序exe所在目录
+func relToAbs(relPath string, baseMode int) (string, error) {
+	var baseDir string
+	var err error
+
+	switch baseMode {
+	case 1:
+		exePath, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		baseDir = filepath.Dir(exePath)
+	default:
+		baseDir, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	full := filepath.Join(baseDir, relPath)
+	// 解析软链接并清理
+	realPath, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return filepath.Abs(full)
+	}
+	return filepath.Clean(realPath), nil
 }
