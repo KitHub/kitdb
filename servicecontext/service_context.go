@@ -2,7 +2,6 @@ package servicecontext
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -130,7 +129,7 @@ func ensureDirExists(ctx context.Context, dirPath string, perm os.FileMode) erro
 				// 创建失败，判断是否权限问题
 				if os.IsPermission(errCreate) {
 					slog.ErrorContext(ctx, "permission error when creating path", slog.String("path", dirPath), slog.Any("error", errCreate))
-					return errors.New(fmt.Sprintf("permission error when creating path: %s", dirPath))
+					return fmt.Errorf("permission error when creating path: %s", dirPath)
 				}
 				slog.ErrorContext(ctx, "creating path failed", slog.String("path", dirPath), slog.Any("error", errCreate))
 				return fmt.Errorf("mkdir all failed: %w", errCreate)
@@ -141,7 +140,7 @@ func ensureDirExists(ctx context.Context, dirPath string, perm os.FileMode) erro
 		// 情况2：Stat 就权限不足（目录上层无访问权限）
 		if os.IsPermission(err) {
 			slog.ErrorContext(ctx, "permission error when accessing path", slog.String("path", dirPath), slog.Any("error", err))
-			return errors.New(fmt.Sprintf("permission error when accessing path: %s", dirPath))
+			return fmt.Errorf("permission error when accessing path: %s", dirPath)
 		}
 
 		// 情况3：其他未知错误（磁盘损坏、路径非法等）
@@ -152,7 +151,7 @@ func ensureDirExists(ctx context.Context, dirPath string, perm os.FileMode) erro
 	// 路径已存在，但不是文件夹（是文件/软链接）
 	if !statInfo.IsDir() {
 		slog.ErrorContext(ctx, "path existed, but not a dir", slog.String("dir", dirPath))
-		return errors.New(fmt.Sprintf("path existed, but not a dir: %s", dirPath))
+		return fmt.Errorf("path existed, but not a dir: %s", dirPath)
 	}
 
 	return nil
