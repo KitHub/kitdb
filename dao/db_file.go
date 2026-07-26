@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	dbFileSuffix          = ".db"
+	dbFileSuffix          = "db"
 	dbFileLineKVSeparator = ","
 )
 
@@ -142,7 +142,7 @@ func createFileInFolder(folder string, filename string, append bool) (*os.File, 
 	if append {
 		flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	} else {
-		flag = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		flag = os.O_CREATE | os.O_WRONLY | os.O_CREATE
 	}
 
 	return os.OpenFile(fullPath, flag, 0644)

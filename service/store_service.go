@@ -8,7 +8,6 @@ import (
 	"github.com/KitHub/kitdb/logic"
 	"github.com/KitHub/protocols/kitdb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 var (
@@ -28,20 +27,18 @@ func (s *StoreService) CreateDB(ctx context.Context, req *kitdb.CreateDBRequest)
 	err = req.Validate()
 	if err != nil {
 		slog.WarnContext(ctx, "invalid request", slog.Any("req", req), slog.Any("error", err))
-		return nil, status.Error(codes.InvalidArgument, "invalid request parameters")
+		rsp = createPBRspWithPBMessageType[kitdb.CreateDBResponse](ctx, codes.InvalidArgument, nil)
+		return rsp, nil
 	}
 
 	err = s.storeLogic.CreateDB(ctx, req.GetDb())
 	if err != nil {
 		slog.ErrorContext(ctx, "create db failed", slog.String("db", req.GetDb()), slog.Any("error", err))
-		return nil, status.Error(codes.Internal, "server error")
+		rsp = createPBRspWithPBMessageType[kitdb.CreateDBResponse](ctx, codes.Internal, nil)
+		return rsp, nil
 	}
 
-	rsp = &kitdb.CreateDBResponse{
-		ErrCode: 0,
-		ErrMsg:  "ok",
-		Data:    &kitdb.CreateDBResponseData{},
-	}
+	rsp = createPBRspWithPBMessageType[kitdb.CreateDBResponse](ctx, codes.OK, nil)
 
 	slog.InfoContext(ctx, "create db done", slog.String("db", req.GetDb()))
 	return rsp, nil
@@ -54,22 +51,20 @@ func (s *StoreService) ReadKey(ctx context.Context, req *kitdb.ReadKeyRequest) (
 	err = req.Validate()
 	if err != nil {
 		slog.WarnContext(ctx, "invalid request", slog.Any("req", req), slog.Any("error", err))
-		return nil, status.Error(codes.InvalidArgument, "invalid request parameters")
+		rsp = createPBRspWithPBMessageType[kitdb.ReadKeyResponse](ctx, codes.InvalidArgument, &kitdb.ReadKeyResponseData{})
+		return rsp, nil
 	}
 
 	value, err := s.storeLogic.ReadKey(ctx, req.GetDb(), req.GetKey())
 	if err != nil {
 		slog.ErrorContext(ctx, "read key failed", slog.String("db", req.GetDb()), slog.String("key", req.GetKey()), slog.Any("error", err))
-		return nil, status.Error(codes.Internal, "server error")
+		rsp = createPBRspWithPBMessageType[kitdb.ReadKeyResponse](ctx, codes.Internal, nil)
+		return rsp, nil
 	}
 
-	rsp = &kitdb.ReadKeyResponse{
-		ErrCode: 0,
-		ErrMsg:  "ok",
-		Data: &kitdb.ReadKeyResponseData{
-			Value: value,
-		},
-	}
+	rsp = createPBRspWithPBMessageType[kitdb.ReadKeyResponse](ctx, codes.OK, &kitdb.ReadKeyResponseData{
+		Value: value,
+	})
 
 	slog.InfoContext(ctx, "read key done", slog.String("db", req.GetDb()), slog.String("key", req.GetKey()), slog.String("value", rsp.GetData().GetValue()))
 	return rsp, nil
@@ -82,20 +77,18 @@ func (s *StoreService) WriteKeyValue(ctx context.Context, req *kitdb.WriteKeyVal
 	err = req.Validate()
 	if err != nil {
 		slog.WarnContext(ctx, "invalid request", slog.Any("req", req), slog.Any("error", err))
-		return nil, status.Error(codes.InvalidArgument, "invalid request parameters")
+		rsp = createPBRspWithPBMessageType[kitdb.WriteKeyValueResponse](ctx, codes.InvalidArgument, nil)
+		return rsp, nil
 	}
 
 	err = s.storeLogic.WriteKeyValue(ctx, req.GetDb(), req.GetKey(), req.GetValue())
 	if err != nil {
 		slog.ErrorContext(ctx, "write key value failed", slog.String("db", req.GetDb()), slog.String("key", req.GetKey()), slog.String("value", req.GetValue()), slog.Any("error", err))
-		return nil, status.Error(codes.Internal, "server error")
+		rsp = createPBRspWithPBMessageType[kitdb.WriteKeyValueResponse](ctx, codes.Internal, nil)
+		return rsp, nil
 	}
 
-	rsp = &kitdb.WriteKeyValueResponse{
-		ErrCode: 0,
-		ErrMsg:  "ok",
-		Data:    &kitdb.WriteKeyValueResponseData{},
-	}
+	rsp = createPBRspWithPBMessageType[kitdb.WriteKeyValueResponse](ctx, codes.OK, &kitdb.WriteKeyValueResponseData{})
 
 	slog.InfoContext(ctx, "write key done", slog.String("db", req.GetDb()), slog.String("key", req.GetKey()), slog.String("value", req.GetValue()))
 	return rsp, nil
