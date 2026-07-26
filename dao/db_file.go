@@ -1,21 +1,23 @@
 package dao
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/KitHub/kitdb/component"
 	"github.com/KitHub/kitdb/entity"
 )
 
 const (
-	dbFileSuffix = ".db"
+	dbFileSuffix          = ".db"
+	dbFileLineKVSeparator = ","
 )
 
 var lineBreak string
@@ -79,13 +81,37 @@ func (d *DBFileDao) CreateDBFile(ctx context.Context, dbName string) error {
 	return nil
 }
 
-func (d *DBFileDao) Write(ctx context.Context, dbName string, key string, value string) error {
+func (d *DBFileDao) ReadKey(ctx context.Context, dbName string, key string) (string, error) {
+	dbEntity, ok := d.databasesMap.Load(dbName)
+	if !ok {
+		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
+		return "", fmt.Errorf("db not found: %s", dbName)
+	}
+	scanner := bufio.NewScanner(dbEntity.DBFile)
+	lineNum := 0
+	var lastV string
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		kv := strings.SplitN(line, dbFileLineKVSeparator, 2)
+		if kv[0] == key {
+			lastV = kv[1]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.ErrorContext(ctx, "scan db file failed", slog.String("dbName", dbName), slog.Any("error", err))
+		return "", err
+	}
+	return lastV, nil
+}
+
+func (d *DBFileDao) WriteKeyValue(ctx context.Context, dbName string, key string, value string) error {
 	dbEntity, ok := d.databasesMap.Load(dbName)
 	if !ok {
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
 		return fmt.Errorf("db not found: %s", dbName)
 	}
-	_, err := dbEntity.DBFile.WriteString(key + "," + value + lineBreak)
+	_, err := dbEntity.DBFile.WriteString(key + dbFileLineKVSeparator + value + lineBreak)
 	if err != nil {
 		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName))
 		return err
@@ -123,10 +149,5 @@ func createFileInFolder(folder string, filename string, append bool) (*os.File, 
 }
 
 func initDBFile(ctx context.Context, dbEntity *entity.DatabaseEntity) error {
-	_, err := dbEntity.DBFile.WriteString("db:" + dbEntity.Name + ";timestamp:" + fmt.Sprintf("%d", time.Now().UnixMilli()))
-	if err != nil {
-		slog.ErrorContext(ctx, "write db file header failed", slog.String("dbFile", dbEntity.Name), slog.Any("error", err))
-		return err
-	}
 	return nil
 }
