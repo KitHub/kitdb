@@ -105,13 +105,18 @@ func prepareDir(ctx context.Context, dirPath string) (string, error) {
 		fullPath = dirPath
 	}
 
+	err := ensureDirExists(ctx, fullPath, 0755)
+	if err != nil {
+		slog.ErrorContext(ctx, "ensure dir existeds failed", slog.String("fullPath", fullPath), slog.String("permission", fmt.Sprintf("%#o", 0775)), slog.Any("error", err))
+		return "", err
+	}
+
 	realPath, err := filepath.EvalSymlinks(fullPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "eval symlinks failed", slog.Any("error", err))
 		return "", err
 	}
 
-	err = ensureDirExists(ctx, realPath, 0755)
 	return realPath, err
 }
 

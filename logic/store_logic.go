@@ -72,6 +72,12 @@ func (s *StoreLogic) CreateDB(ctx context.Context, dbName string) error {
 		return fmt.Errorf("db already existed: %s", dbName)
 	}
 
+	err := s.dbFileDao.CreateDBFile(ctx, dbName)
+	if err != nil {
+		slog.ErrorContext(ctx, "create db file failed", slog.String("db", dbName), slog.Any("error", err))
+		return fmt.Errorf("create db file failed: %s", dbName)
+	}
+
 	db := &component.SyncMap[string, string]{}
 	s.databasesMap.Store(dbName, db)
 
