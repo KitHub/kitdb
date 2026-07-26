@@ -3,7 +3,7 @@ module github.com/KitHub/kitdb
 go 1.26.2
 
 require (
-	github.com/KitHub/protocols v0.1.43
+	github.com/KitHub/protocols v0.1.44
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/robfig/cron/v3 v3.0.1
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0

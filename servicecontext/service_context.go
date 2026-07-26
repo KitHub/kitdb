@@ -24,7 +24,7 @@ type ServiceContext struct {
 	ShutdownComponent *component.ShutdownComponent
 	DBFileDao         *dao.DBFileDao
 	DemoLogic         *logic.DemoLogic
-	DemoService       *service.DemoService
+	StoreService      *service.StoreService
 }
 
 var gServiceCtx *ServiceContext
@@ -54,7 +54,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 		shutdownComponent := component.NewShutdownComponent(ctx)
 		dbFileDao := dao.NewDBFileDao(ctx, dataDir, shutdownComponent)
 		demoLogic := logic.NewDemoLogic(ctx)
-		demoService := service.NewDemoService(ctx, demoLogic)
+		storeService := service.NewStoreService(ctx, demoLogic)
 
 		gServiceCtx = &ServiceContext{
 			ShutdownComponent: shutdownComponent,
@@ -63,7 +63,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 			CronComponent:     cronComponent,
 			DBFileDao:         dbFileDao,
 			DemoLogic:         demoLogic,
-			DemoService:       demoService,
+			StoreService:      storeService,
 		}
 	})
 

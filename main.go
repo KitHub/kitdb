@@ -119,8 +119,8 @@ func initRpcServer(ctx context.Context, serverConfig *config.ServiceConfigEntity
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
 	// bind the service implementation to the gRPC server
-	kitdb.RegisterDemoAPIServer(
-		server, serviceContext.DemoService)
+	kitdb.RegisterStoreAPIServer(
+		server, serviceContext.StoreService)
 
 	go func() {
 		err := server.Serve(listener)
@@ -147,7 +147,7 @@ func initHttpServer(ctx context.Context, httpServerConfig *config.ServiceConfigE
 	grpcHostAndPort := fmt.Sprintf("%s:%d", grpcServerConfig.Host, grpcServerConfig.Port)
 	httpHostAndPort := fmt.Sprintf("%s:%d", httpServerConfig.Host, httpServerConfig.Port)
 	gateway := runtime.NewServeMux(runtime.WithForwardResponseOption(rspModifier))
-	err := kitdb.RegisterDemoAPIHandlerFromEndpoint(ctx, gateway, grpcHostAndPort, []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())})
+	err := kitdb.RegisterStoreAPIHandlerFromEndpoint(ctx, gateway, grpcHostAndPort, []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())})
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to register http gateway", slog.String("error", err.Error()))
 		return nil, err
