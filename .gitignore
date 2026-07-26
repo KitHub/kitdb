@@ -38,3 +38,4 @@ kitdb
 
 # run output
 logs/
+data/
