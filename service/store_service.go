@@ -18,7 +18,7 @@ var (
 
 type StoreService struct {
 	kitdb.UnimplementedStoreAPIServer
-	demoLogic *logic.DemoLogic
+	storeLogic *logic.StoreLogic
 }
 
 // ReadKey implements [kitdb.StoreAPIServer].
@@ -49,10 +49,10 @@ func (s *StoreService) WriteKeyValue(ctx context.Context, req *kitdb.WriteKeyVal
 	return rsp, nil
 }
 
-func NewStoreService(ctx context.Context, demoLogic *logic.DemoLogic) *StoreService {
+func NewStoreService(ctx context.Context, storeLogic *logic.StoreLogic) *StoreService {
 	storeServiceOnce.Do(func() {
 		storeServiceInstance = &StoreService{
-			demoLogic: demoLogic,
+			storeLogic: storeLogic,
 		}
 	})
 	return storeServiceInstance

@@ -22,7 +22,7 @@ type ServiceContext struct {
 	InitComponent     *component.InitComponent
 	ShutdownComponent *component.ShutdownComponent
 	DBFileDao         *dao.DBFileDao
-	DemoLogic         *logic.DemoLogic
+	StoreLogic        *logic.StoreLogic
 	StoreService      *service.StoreService
 }
 
@@ -52,8 +52,8 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 		initComponent := component.NewInitComponent(ctx)
 		shutdownComponent := component.NewShutdownComponent(ctx)
 		dbFileDao := dao.NewDBFileDao(ctx, dataDir, shutdownComponent)
-		demoLogic := logic.NewDemoLogic(ctx)
-		storeService := service.NewStoreService(ctx, demoLogic)
+		storeLogic := logic.NewStoreLogic(ctx)
+		storeService := service.NewStoreService(ctx, storeLogic)
 
 		gServiceCtx = &ServiceContext{
 			ShutdownComponent: shutdownComponent,
@@ -61,7 +61,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 			Logger:            logger,
 			CronComponent:     cronComponent,
 			DBFileDao:         dbFileDao,
-			DemoLogic:         demoLogic,
+			StoreLogic:        storeLogic,
 			StoreService:      storeService,
 		}
 	})
@@ -82,6 +82,7 @@ func initLog(ctx context.Context, logConfig *config.LogConfigEntity) (
 	}
 	serviceLogger := slog.New(slog.NewTextHandler(log, nil))
 	slog.SetDefault(serviceLogger)
+	slog.InfoContext(ctx, "init logger done")
 	return serviceLogger, nil
 }
 

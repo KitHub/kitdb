@@ -94,7 +94,7 @@ func initServices(ctx context.Context, serviceConfig *config.ConfigEntity,
 			slog.String("error", err.Error()))
 		return err
 	}
-	_, err = initHttpServer(ctx, httpServiceConfig, grpcServiceConfig, serviceContext)
+	_, err = initHttpServer(ctx, httpServiceConfig, grpcServiceConfig)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to init HTTP server",
 			slog.String("error", err.Error()))
@@ -142,7 +142,7 @@ func initRpcServer(ctx context.Context, serverConfig *config.ServiceConfigEntity
 
 // initHttpServer initializes the HTTP server and registers the http gateway.
 // The http gateway translates HTTP API into gRPC calls to the gRPC server.
-func initHttpServer(ctx context.Context, httpServerConfig *config.ServiceConfigEntity, grpcServerConfig *config.ServiceConfigEntity, serviceContext *servicecontext.ServiceContext) (*http.Server, error) {
+func initHttpServer(ctx context.Context, httpServerConfig *config.ServiceConfigEntity, grpcServerConfig *config.ServiceConfigEntity) (*http.Server, error) {
 	slog.InfoContext(ctx, "init http server", slog.Any("serverConfig", httpServerConfig))
 	grpcHostAndPort := fmt.Sprintf("%s:%d", grpcServerConfig.Host, grpcServerConfig.Port)
 	httpHostAndPort := fmt.Sprintf("%s:%d", httpServerConfig.Host, httpServerConfig.Port)

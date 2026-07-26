@@ -149,5 +149,6 @@ func createFileInFolder(folder string, filename string, append bool) (*os.File, 
 }
 
 func initDBFile(ctx context.Context, dbEntity *entity.DatabaseEntity) error {
+	slog.InfoContext(ctx, "init db file done", slog.String("db", dbEntity.Name), slog.String("dbFile", dbEntity.DBFile.Name()))
 	return nil
 }
