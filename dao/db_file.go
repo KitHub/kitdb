@@ -79,13 +79,13 @@ func (d *DBFileDao) CreateDBFile(ctx context.Context, dbName string) error {
 	return nil
 }
 
-func (d *DBFileDao) AppendLine(ctx context.Context, dbName string, content string) error {
+func (d *DBFileDao) Write(ctx context.Context, dbName string, key string, value string) error {
 	dbEntity, ok := d.databasesMap.Load(dbName)
 	if !ok {
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
 		return fmt.Errorf("db not found: %s", dbName)
 	}
-	_, err := dbEntity.DBFile.WriteString(content + lineBreak)
+	_, err := dbEntity.DBFile.WriteString(key + "," + value + lineBreak)
 	if err != nil {
 		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName))
 		return err
