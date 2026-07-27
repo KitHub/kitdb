@@ -32,8 +32,22 @@ func setPbField(ctx context.Context, msg proto.Message, fieldName string, value 
 	if fd == nil {
 		return false
 	}
-	val := protoreflect.ValueOf(value)
-	r.Set(fd, val)
+
+	var setVal protoreflect.Value
+	switch fd.Kind() {
+	case protoreflect.MessageKind:
+		// 嵌套protobuf message字段，必须用ValueOfMessage构造
+		if pbMsg, ok := value.(proto.Message); ok {
+			setVal = protoreflect.ValueOfMessage(pbMsg.ProtoReflect())
+		} else {
+			return false
+		}
+	default:
+		// 普通基础类型 int32/string 直接用ValueOf
+		setVal = protoreflect.ValueOf(value)
+	}
+
+	r.Set(fd, setVal)
 	return true
 }
 

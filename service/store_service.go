@@ -38,7 +38,7 @@ func (s *StoreService) CreateDB(ctx context.Context, req *kitdb.CreateDBRequest)
 		return rsp, nil
 	}
 
-	rsp = createPBRspWithPBMessageType[kitdb.CreateDBResponse](ctx, codes.OK, nil)
+	rsp = createPBRspWithPBMessageType[kitdb.CreateDBResponse](ctx, codes.OK, kitdb.CreateDBResponseData{})
 
 	slog.InfoContext(ctx, "create db done", slog.String("db", req.GetDb()))
 	return rsp, nil
