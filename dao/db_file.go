@@ -16,8 +16,11 @@ import (
 )
 
 const (
-	dbFileSuffix          = "db"
-	dbFileLineKVSeparator = ","
+	dbFileSuffix                      = "db"
+	dbFileLineKVSeparator             = ","
+	dbExistFileOpenFlag               = os.O_RDWR | os.O_APPEND
+	dbCreateFileOpenFlag              = os.O_RDWR | os.O_APPEND | os.O_CREATE
+	dbFilePermission      os.FileMode = 0644
 )
 
 var lineBreak string
@@ -26,7 +29,7 @@ var onceForDBFileDao sync.Once
 
 type DBFileDao struct {
 	dataDir           string
-	databasesMap      *component.SyncMap[string, *entity.DatabaseEntity] // key=dbname
+	databasesMap      *component.SyncMap[string, *entity.DatabaseEntity] // key=dbname, and also dbFileName(without ".db")
 	shutdownComponent *component.ShutdownComponent
 }
 
@@ -65,7 +68,7 @@ func (d *DBFileDao) CreateDBFile(ctx context.Context, dbName string) error {
 		d.databasesMap.Store(dbName, dbEntity)
 	}
 	dbFileName := dbName + "." + dbFileSuffix
-	dbFile, err := createFileInFolder(d.dataDir, dbFileName, false)
+	dbFile, err := createFileInFolder(d.dataDir, dbFileName, dbCreateFileOpenFlag, dbFilePermission)
 	if err != nil {
 		slog.ErrorContext(ctx, "create db file failed", slog.String("dataDir", d.dataDir), slog.String("dbFileName", dbFileName), slog.Any("error", err))
 		return err
@@ -133,19 +136,61 @@ func (d *DBFileDao) CloseDBFile(ctx context.Context, dbName string) error {
 	return nil
 }
 
+func (d *DBFileDao) ListDBFiles(ctx context.Context) ([]string, error) {
+	entries, err := os.ReadDir(d.dataDir)
+	if err != nil {
+		slog.ErrorContext(ctx, "read data dir failed", slog.String("dataDir", d.dataDir), slog.Any("error", err))
+		return nil, err
+	}
+
+	retval := []string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			continue
+		}
+		retval = append(retval, d.dataDir+string(os.PathSeparator)+name)
+	}
+	return retval, nil
+}
+
+func (d *DBFileDao) LoadDBByDBFile(ctx context.Context, dbFilePath string) (*entity.DatabaseEntity, error) {
+	dbFilePathElements := strings.Split(dbFilePath, ".")
+	if dbFilePathElements[len(dbFilePathElements)-1] != dbFileSuffix {
+		slog.ErrorContext(ctx, "loading db by file failed", slog.String("dbFilePath", dbFilePath), slog.Any("error", "invalid db file name format"))
+		return nil, fmt.Errorf("invalid db file name format")
+	}
+
+	pathElements := strings.Split(dbFilePath, string(os.PathSeparator))
+	dbFileName := pathElements[len(pathElements)-1]
+	dbFileElements := strings.Split(dbFileName, ".")
+	dbName := dbFileElements[0]
+
+	dbFile, err := os.OpenFile(dbFilePath, dbExistFileOpenFlag, dbFilePermission)
+	if err != nil {
+		slog.ErrorContext(ctx, "open db file failed", slog.String("dbFile", dbFileName), slog.Any("error", err))
+		return nil, err
+	}
+	databaseEntity := &entity.DatabaseEntity{
+		Name:   dbName,
+		DBFile: dbFile,
+	}
+	d.databasesMap.Store(dbName, databaseEntity)
+
+	return databaseEntity, nil
+}
+
+func (d *DBFileDao) LoadDBByDBName(ctx context.Context, dbName string) (*entity.DatabaseEntity, error) {
+	dbFilePath := d.dataDir + string(os.PathSeparator) + dbName + "." + dbFileSuffix
+	return d.LoadDBByDBFile(ctx, dbFilePath)
+}
+
 // private functions ================================================================
 
 // createFileInFolder
-func createFileInFolder(folder string, filename string, append bool) (*os.File, error) {
+func createFileInFolder(folder string, filename string, openFileFlag int, openFilePerm os.FileMode) (*os.File, error) {
 	fullPath := filepath.Join(folder, filename)
-	var flag int
-	if append {
-		flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
-	} else {
-		flag = os.O_CREATE | os.O_WRONLY | os.O_CREATE
-	}
-
-	return os.OpenFile(fullPath, flag, 0644)
+	return os.OpenFile(fullPath, openFileFlag, openFilePerm)
 }
 
 func initDBFile(ctx context.Context, dbEntity *entity.DatabaseEntity) error {

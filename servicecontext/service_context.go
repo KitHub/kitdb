@@ -52,7 +52,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 		initComponent := component.NewInitComponent(ctx)
 		shutdownComponent := component.NewShutdownComponent(ctx)
 		dbFileDao := dao.NewDBFileDao(ctx, dataDir, shutdownComponent)
-		storeLogic := logic.NewStoreLogic(ctx, dbFileDao)
+		storeLogic := logic.NewStoreLogic(ctx, initComponent, dbFileDao)
 		storeService := service.NewStoreService(ctx, storeLogic)
 
 		gServiceCtx = &ServiceContext{
