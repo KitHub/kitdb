@@ -20,6 +20,22 @@ type StoreService struct {
 	storeLogic *logic.StoreLogic
 }
 
+// CreateIndex implements [kitdb.StoreEngineAPIServer].
+func (s *StoreService) CreateIndex(ctx context.Context, req *kitdb.CreateIndexRequest) (rsp *kitdb.CreateIndexResponse, err error) {
+	slog.InfoContext(ctx, "create index", slog.Any("req", req))
+
+	err = s.storeLogic.CreateIndex(ctx, req.GetDb(), req.GetIndexName(), req.GetIndexType(), req.GetFields())
+	if err != nil {
+		slog.ErrorContext(ctx, "create index failed", slog.String("db", req.GetDb()), slog.Any("error", err))
+		rsp = createPBRspWithPBMessageType[kitdb.CreateIndexResponse](ctx, codes.Internal, nil)
+		return rsp, nil
+	}
+
+	rsp = createPBRspWithPBMessageType[kitdb.CreateIndexResponse](ctx, codes.OK, &kitdb.CreateIndexResponseData{})
+	slog.InfoContext(ctx, "create index done", slog.Any("rsp", rsp))
+	return rsp, nil
+}
+
 // CreateDB implements [kitdb.StoreEngineAPIServer].
 func (s *StoreService) CreateDB(ctx context.Context, req *kitdb.CreateDBRequest) (rsp *kitdb.CreateDBResponse, err error) {
 	slog.InfoContext(ctx, "create db", slog.String("db", req.GetDb()))
@@ -55,10 +71,16 @@ func (s *StoreService) ReadKey(ctx context.Context, req *kitdb.ReadKeyRequest) (
 		return rsp, nil
 	}
 
-	value, err := s.storeLogic.ReadKey(ctx, req.GetDb(), req.GetKey())
+	value, ok, err := s.storeLogic.ReadKey(ctx, req.GetDb(), req.GetKey())
 	if err != nil {
 		slog.ErrorContext(ctx, "read key failed", slog.String("db", req.GetDb()), slog.String("key", req.GetKey()), slog.Any("error", err))
 		rsp = createPBRspWithPBMessageType[kitdb.ReadKeyResponse](ctx, codes.Internal, nil)
+		return rsp, nil
+	}
+
+	if !ok {
+		slog.WarnContext(ctx, "key not found", slog.String("db", req.GetDb()), slog.String("key", req.GetKey()))
+		rsp = createPBRspWithPBMessageType[kitdb.ReadKeyResponse](ctx, codes.NotFound, nil)
 		return rsp, nil
 	}
 

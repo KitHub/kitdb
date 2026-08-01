@@ -8,6 +8,7 @@ import (
 
 	"github.com/KitHub/kitdb/component"
 	"github.com/KitHub/kitdb/dao"
+	"github.com/KitHub/protocols/kitdb"
 )
 
 var storeLogic *StoreLogic
@@ -33,31 +34,34 @@ func NewStoreLogic(ctx context.Context, initComponent *component.InitComponent, 
 	return storeLogic
 }
 
-func (s *StoreLogic) ReadKey(ctx context.Context, dbName string, key string) (string, error) {
+func (s *StoreLogic) ReadKey(ctx context.Context, dbName string, key string) (string, bool, error) {
 	slog.DebugContext(ctx, "read key", slog.String("db", dbName), slog.String("key", key))
-	db, ok := s.dataCaches.Load(dbName)
+	dbCache, ok := s.dataCaches.Load(dbName)
 	if !ok {
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
-		return "", fmt.Errorf("db not found: %s", dbName)
+		return "", false, fmt.Errorf("db not found: %s", dbName)
 	}
 
-	value, ok := db.Load(key)
+	value, ok := dbCache.Load(key)
 	if !ok {
-		value, err := queryFromStorageEngine(ctx, s.storageEngine, dbName, key)
+		value, ok, err := queryFromStorageEngine(ctx, s.storageEngine, dbName, key)
 		if err != nil {
 			slog.ErrorContext(ctx, "query from db file failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
-			return "", fmt.Errorf("query from db failed")
+			return "", false, fmt.Errorf("query from db failed")
 		}
-		db.Store(key, value)
-		return value, nil
+		if !ok {
+			return "", false, nil
+		}
+		dbCache.Store(key, value)
+		return value, true, nil
 	}
 
 	slog.DebugContext(ctx, "read key done", slog.String("db", dbName), slog.String("key", key), slog.String("value", value))
-	return value, nil
+	return value, true, nil
 }
 
 func (s *StoreLogic) WriteKeyValue(ctx context.Context, dbName string, key string, value string) error {
-	db, ok := s.dataCaches.Load(dbName)
+	dbCache, ok := s.dataCaches.Load(dbName)
 	if !ok {
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
 		return fmt.Errorf("db not found: %s", dbName)
@@ -68,9 +72,9 @@ func (s *StoreLogic) WriteKeyValue(ctx context.Context, dbName string, key strin
 		slog.ErrorContext(ctx, "write data log failed", slog.String("dbName", dbName), slog.String("key", key), slog.String("value", value))
 		return err
 	}
-	db.Store(key, value)
+	dbCache.Store(key, value)
 
-	slog.DebugContext(ctx, "read key done", slog.String("db", dbName), slog.String("key", key), slog.String("value", value))
+	slog.DebugContext(ctx, "write key value done", slog.String("db", dbName), slog.String("key", key), slog.String("value", value))
 	return nil
 }
 
@@ -95,6 +99,10 @@ func (s *StoreLogic) CreateDB(ctx context.Context, dbName string) error {
 	return nil
 }
 
+func (s *StoreLogic) CreateIndex(ctx context.Context, dbName string, indexName string, indexType kitdb.IndexType, fields []string) error {
+	return s.storageEngine.CreateIndex(ctx, dbName, indexName, indexType, fields)
+}
+
 func (s *StoreLogic) InitDBs(ctx context.Context) error {
 	slog.InfoContext(ctx, "init all dbs begin")
 
@@ -113,6 +121,6 @@ func (s *StoreLogic) InitDBs(ctx context.Context) error {
 }
 
 // private functions =================================================
-func queryFromStorageEngine(ctx context.Context, storageEngine dao.StorageEngine, dbName string, key string) (value string, err error) {
+func queryFromStorageEngine(ctx context.Context, storageEngine dao.StorageEngine, dbName string, key string) (value string, ok bool, err error) {
 	return storageEngine.ReadKey(ctx, dbName, key)
 }

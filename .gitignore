@@ -39,3 +39,4 @@ kitdb
 # run output
 logs/
 data/
+__debug_bin*

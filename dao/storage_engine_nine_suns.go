@@ -4,26 +4,28 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/KitHub/kitdb/component"
 	"github.com/KitHub/kitdb/entity"
+	"github.com/KitHub/protocols/kitdb"
 )
 
 type nineSunsStorageEngineVarsStruct struct {
-	dbFileSuffix          string
-	dbIndexFileSuffix     string
-	dbFileLineKVSeparator string
-	dbExistFileOpenFlag   int
-	dbCreateFileOpenFlag  int
-	dbFilePermission      os.FileMode
-	lineBreak             string
-	ninesunsStorageEngine *NineSunsStorageEngine
+	dbIndexFieldsSeparator string
+	dbFileSuffix           string
+	dbIndexFileSuffix      string
+	dbFileLineKVSeparator  string
+	dbExistFileOpenFlag    int
+	dbCreateFileOpenFlag   int
+	dbFilePermission       os.FileMode
+	lineBreak              byte
+	ninesunsStorageEngine  *NineSunsStorageEngine
 }
 
 var onceForNineSunsStorageEngine sync.Once = sync.Once{}
@@ -40,20 +42,15 @@ type NineSunsStorageEngine struct {
 func NewNineSunsStorageEngine(ctx context.Context, dataDir string, initCallbackComponent *component.InitComponent, shutdownCallbackComponent *component.ShutdownComponent) StorageEngine {
 	onceForNineSunsStorageEngine.Do(func() {
 		nineSunsStorageEngineVars = &nineSunsStorageEngineVarsStruct{
-			dbFileSuffix:          "db",
-			dbIndexFileSuffix:     "idx",
-			dbFileLineKVSeparator: ",",
-			dbExistFileOpenFlag:   os.O_RDWR | os.O_APPEND,
-			dbCreateFileOpenFlag:  os.O_RDWR | os.O_APPEND | os.O_CREATE,
-			dbFilePermission:      os.FileMode(0644),
-			lineBreak:             "",
-			ninesunsStorageEngine: &NineSunsStorageEngine{},
-		}
-
-		if runtime.GOOS == "windows" {
-			nineSunsStorageEngineVars.lineBreak = "\r\n"
-		} else {
-			nineSunsStorageEngineVars.lineBreak = "\n"
+			dbIndexFieldsSeparator: "-",
+			dbFileSuffix:           "db",
+			dbIndexFileSuffix:      "idx",
+			dbFileLineKVSeparator:  ",",
+			dbExistFileOpenFlag:    os.O_RDWR,
+			dbCreateFileOpenFlag:   os.O_RDWR | os.O_CREATE,
+			dbFilePermission:       os.FileMode(0644),
+			lineBreak:              '\n',
+			ninesunsStorageEngine:  &NineSunsStorageEngine{},
 		}
 
 		nineSunsStorageEngineVars.ninesunsStorageEngine = &NineSunsStorageEngine{
@@ -101,28 +98,50 @@ func (s *NineSunsStorageEngine) CreateDB(ctx context.Context, db string) error {
 	return nil
 }
 
-func (s *NineSunsStorageEngine) ReadKey(ctx context.Context, dbName string, key string) (string, error) {
+func (s *NineSunsStorageEngine) CreateIndex(ctx context.Context, db string, index string, indexType kitdb.IndexType, fields []string) error {
+	dbEntity, ok := s.databasesMap.Load(db)
+	if !ok {
+		slog.ErrorContext(ctx, "db not found", slog.String("db", db))
+		return fmt.Errorf("db not found: %s", db)
+	}
+	_, ok = dbEntity.Indexes.Load(index)
+	if ok {
+		slog.ErrorContext(ctx, "index already existed", slog.String("index", index))
+		return fmt.Errorf("index already existed: %s", index)
+	}
+	indexEntity := &entity.IndexEntity{
+		Name:    index,
+		DBName:  db,
+		Indexes: &component.SyncMap[string, int64]{},
+	}
+	dbEntity.Indexes.Store(index, indexEntity)
+	return nil
+}
+
+func (s *NineSunsStorageEngine) ReadKey(ctx context.Context, dbName string, key string) (string, bool, error) {
 	dbEntity, ok := s.databasesMap.Load(dbName)
 	if !ok {
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
-		return "", fmt.Errorf("db not found: %s", dbName)
+		return "", false, fmt.Errorf("db not found: %s", dbName)
 	}
-	scanner := bufio.NewScanner(dbEntity.DBFile)
-	lineNum := 0
-	var lastV string
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		kv := strings.SplitN(line, nineSunsStorageEngineVars.dbFileLineKVSeparator, 2)
-		if kv[0] == key {
-			lastV = kv[1]
+
+	indexEntity, ok := determineIndex(ctx, dbEntity, []string{key})
+	if ok {
+		v, ok, err := queryKeyByIndex(ctx, dbEntity, indexEntity, key)
+		if err != nil {
+			slog.ErrorContext(ctx, "query key by index failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
+			return "", false, err
 		}
+		return v, ok, nil
 	}
-	if err := scanner.Err(); err != nil {
-		slog.ErrorContext(ctx, "scan db file failed", slog.String("dbName", dbName), slog.Any("error", err))
-		return "", err
+
+	v, ok, err := queryKeyByReadingFile(ctx, dbEntity, key)
+	if err != nil {
+		slog.ErrorContext(ctx, "query key by reading file failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
+		return "", false, err
 	}
-	return lastV, nil
+
+	return v, ok, nil
 }
 
 func (s *NineSunsStorageEngine) WriteKeyValue(ctx context.Context, dbName string, key string, value string) error {
@@ -131,11 +150,25 @@ func (s *NineSunsStorageEngine) WriteKeyValue(ctx context.Context, dbName string
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
 		return fmt.Errorf("db not found: %s", dbName)
 	}
-	_, err := dbEntity.DBFile.WriteString(key + nineSunsStorageEngineVars.dbFileLineKVSeparator + value + nineSunsStorageEngineVars.lineBreak)
+
+	_, err := dbEntity.DBFile.Seek(0, io.SeekEnd) // Move the file pointer to the end of the file before writing
 	if err != nil {
-		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName))
+		slog.ErrorContext(ctx, "seek db file failed", slog.String("dbName", dbName), slog.Any("error", err))
 		return err
 	}
+
+	_, err = dbEntity.DBFile.WriteString(key + nineSunsStorageEngineVars.dbFileLineKVSeparator + value + string(nineSunsStorageEngineVars.lineBreak))
+	if err != nil {
+		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName), slog.Any("error", err))
+		return err
+	}
+
+	err = updateIndex(ctx, dbEntity, []string{key}, value)
+	if err != nil {
+		slog.ErrorContext(ctx, "update index failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
+		return err
+	}
+
 	return nil
 }
 
@@ -217,6 +250,7 @@ func listDBFiles(ctx context.Context, dataDir string) ([]string, error) {
 }
 
 func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity, error) {
+	// todo, load db and index
 	dbFilePathElements := strings.Split(dataDir, ".")
 	if dbFilePathElements[len(dbFilePathElements)-1] != nineSunsStorageEngineVars.dbFileSuffix {
 		slog.ErrorContext(ctx, "loading db by file failed", slog.String("dbFilePath", dataDir), slog.Any("error", "invalid db file name format"))
@@ -234,9 +268,8 @@ func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity
 		return nil, err
 	}
 	databaseEntity := &entity.DatabaseEntity{
-		Name:   dbName,
-		DBFile: dbFile,
-		// todo, load indexes from index file
+		Name:    dbName,
+		DBFile:  dbFile,
 		Indexes: &component.SyncMap[string, *entity.IndexEntity]{},
 	}
 	return databaseEntity, nil
@@ -245,4 +278,93 @@ func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity
 func loadDBByDBName(ctx context.Context, dataDir string, dbName string) (*entity.DatabaseEntity, error) {
 	dbFilePath := dataDir + string(os.PathSeparator) + dbName + "." + nineSunsStorageEngineVars.dbFileSuffix
 	return loadDBByDBFile(ctx, dbFilePath)
+}
+
+func updateIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, fields []string, value string) error {
+	_, ok := determineIndex(ctx, dbEntity, fields)
+	if !ok {
+		slog.DebugContext(ctx, "index not found, skip updating index", slog.String("dbName", dbEntity.Name), slog.Any("fields", fields))
+		return nil
+	}
+
+	// todo, update index by reading db file and updating index file
+	return nil
+}
+
+func determineIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, fields []string) (index *entity.IndexEntity, ok bool) {
+	fieldsJoined := strings.Join(fields, nineSunsStorageEngineVars.dbIndexFieldsSeparator)
+	for _, tmpIndex := range dbEntity.Indexes.Keys() {
+		tmpIndexEntity, ok := dbEntity.Indexes.Load(tmpIndex)
+		if !ok {
+			slog.ErrorContext(ctx, "index not found", slog.String("index", tmpIndex))
+			return nil, false
+		}
+		if tmpIndexEntity.Fields == fieldsJoined {
+			// todo, find all matched indexes, then return the best one
+			return tmpIndexEntity, true
+		}
+
+	}
+	return nil, false
+}
+
+func queryKeyByIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, indexEntity *entity.IndexEntity, key string) (value string, ok bool, err error) {
+	currentFilePos, err := dbEntity.DBFile.Seek(0, io.SeekCurrent)
+	if err != nil {
+		slog.ErrorContext(ctx, "seek current pos in db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return "", false, err
+	}
+
+	pos, ok := indexEntity.Indexes.Load(key)
+	if !ok {
+		slog.ErrorContext(ctx, "index not found", slog.String("index", indexEntity.Name))
+		return "", false, fmt.Errorf("key not found in index: %s", key)
+	}
+
+	_, err = dbEntity.DBFile.Seek(pos+1, io.SeekStart) // +1 is for key-value separator
+	if err != nil {
+		slog.ErrorContext(ctx, "seek index pos in db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return "", false, err
+	}
+
+	buf := make([]byte, 1024)
+	n, err := dbEntity.DBFile.Read(buf)
+	if err != nil {
+		slog.ErrorContext(ctx, "read db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return "", false, err
+	}
+
+	for i := 0; i < n; i++ {
+		if buf[i] == nineSunsStorageEngineVars.lineBreak {
+			value = string(buf[:i])
+			break
+		}
+	}
+
+	// restore file pos
+	_, err = dbEntity.DBFile.Seek(currentFilePos, io.SeekStart)
+	if err != nil {
+		slog.ErrorContext(ctx, "seek origin pos indb file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+func queryKeyByReadingFile(ctx context.Context, dbEntity *entity.DatabaseEntity, key string) (value string, ok bool, err error) {
+	scanner := bufio.NewScanner(dbEntity.DBFile)
+	lineNum := 0
+	var lastV string
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		kv := strings.SplitN(line, nineSunsStorageEngineVars.dbFileLineKVSeparator, 2)
+		if kv[0] == key {
+			lastV = kv[1]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.ErrorContext(ctx, "scan db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return "", false, err
+	}
+	return lastV, true, nil
 }
