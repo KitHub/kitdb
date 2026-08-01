@@ -15,16 +15,16 @@ var onceStoreLogic sync.Once
 
 type StoreLogic struct {
 	dataCaches    *component.SyncMap[string, *component.SyncMap[string, string]] // key = dbName
-	storeEngine   dao.StoreEngine
+	storageEngine dao.StorageEngine
 	initComponent *component.InitComponent
 }
 
-func NewStoreLogic(ctx context.Context, initComponent *component.InitComponent, storeEngine dao.StoreEngine) *StoreLogic {
+func NewStoreLogic(ctx context.Context, initComponent *component.InitComponent, storageEngine dao.StorageEngine) *StoreLogic {
 	onceStoreLogic.Do(func() {
 		storeLogic = &StoreLogic{
 			initComponent: initComponent,
 			dataCaches:    &component.SyncMap[string, *component.SyncMap[string, string]]{},
-			storeEngine:   storeEngine,
+			storageEngine: storageEngine,
 		}
 	})
 	storeLogic.initComponent.RegisterInitCallback(func(ctx context.Context) error {
@@ -43,7 +43,7 @@ func (s *StoreLogic) ReadKey(ctx context.Context, dbName string, key string) (st
 
 	value, ok := db.Load(key)
 	if !ok {
-		value, err := queryFromStoreEngine(ctx, s.storeEngine, dbName, key)
+		value, err := queryFromStorageEngine(ctx, s.storageEngine, dbName, key)
 		if err != nil {
 			slog.ErrorContext(ctx, "query from db file failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
 			return "", fmt.Errorf("query from db failed")
@@ -63,7 +63,7 @@ func (s *StoreLogic) WriteKeyValue(ctx context.Context, dbName string, key strin
 		return fmt.Errorf("db not found: %s", dbName)
 	}
 
-	err := s.storeEngine.WriteKeyValue(ctx, dbName, key, value)
+	err := s.storageEngine.WriteKeyValue(ctx, dbName, key, value)
 	if err != nil {
 		slog.ErrorContext(ctx, "write data log failed", slog.String("dbName", dbName), slog.String("key", key), slog.String("value", value))
 		return err
@@ -82,7 +82,7 @@ func (s *StoreLogic) CreateDB(ctx context.Context, dbName string) error {
 		return fmt.Errorf("db already existed: %s", dbName)
 	}
 
-	err := s.storeEngine.CreateDB(ctx, dbName)
+	err := s.storageEngine.CreateDB(ctx, dbName)
 	if err != nil {
 		slog.ErrorContext(ctx, "create db file failed", slog.String("db", dbName), slog.Any("error", err))
 		return fmt.Errorf("create db file failed: %s", dbName)
@@ -98,7 +98,7 @@ func (s *StoreLogic) CreateDB(ctx context.Context, dbName string) error {
 func (s *StoreLogic) InitDBs(ctx context.Context) error {
 	slog.InfoContext(ctx, "init all dbs begin")
 
-	dbNames, err := s.storeEngine.GetDBNames(ctx)
+	dbNames, err := s.storageEngine.GetDBNames(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "get db names failed", slog.Any("error", err))
 		return err
@@ -113,6 +113,6 @@ func (s *StoreLogic) InitDBs(ctx context.Context) error {
 }
 
 // private functions =================================================
-func queryFromStoreEngine(ctx context.Context, storeEngine dao.StoreEngine, dbName string, key string) (value string, err error) {
-	return storeEngine.ReadKey(ctx, dbName, key)
+func queryFromStorageEngine(ctx context.Context, storageEngine dao.StorageEngine, dbName string, key string) (value string, err error) {
+	return storageEngine.ReadKey(ctx, dbName, key)
 }
