@@ -16,14 +16,13 @@ import (
 )
 
 type nineSunsStoreEngineVarsStruct struct {
-	dbFileSuffix               string
-	dbFileLineKVSeparator      string
-	dbExistFileOpenFlag        int
-	dbCreateFileOpenFlag       int
-	dbFilePermission           os.FileMode
-	lineBreak                  string
-	ninesunsStoreEngine        *NineSunsStoreEngine
-	onceForNineSunsStoreEngine sync.Once
+	dbFileSuffix          string
+	dbFileLineKVSeparator string
+	dbExistFileOpenFlag   int
+	dbCreateFileOpenFlag  int
+	dbFilePermission      os.FileMode
+	lineBreak             string
+	ninesunsStoreEngine   *NineSunsStoreEngine
 }
 
 var onceForNineSunsStoreEngine sync.Once = sync.Once{}
