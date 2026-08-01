@@ -15,17 +15,19 @@ import (
 	"github.com/KitHub/kitdb/entity"
 )
 
-const (
-	dbFileSuffix                      = "db"
-	dbFileLineKVSeparator             = ","
-	dbExistFileOpenFlag               = os.O_RDWR | os.O_APPEND
-	dbCreateFileOpenFlag              = os.O_RDWR | os.O_APPEND | os.O_CREATE
-	dbFilePermission      os.FileMode = 0644
-)
+type nineSunsStoreEngineVarsStruct struct {
+	dbFileSuffix               string
+	dbFileLineKVSeparator      string
+	dbExistFileOpenFlag        int
+	dbCreateFileOpenFlag       int
+	dbFilePermission           os.FileMode
+	lineBreak                  string
+	ninesunsStoreEngine        *NineSunsStoreEngine
+	onceForNineSunsStoreEngine sync.Once
+}
 
-var lineBreak string
-var ninesunsStoreEngine *NineSunsStoreEngine
-var onceForNineSunsStoreEngine sync.Once
+var onceForNineSunsStoreEngine sync.Once = sync.Once{}
+var nineSunsStoreEngineVars *nineSunsStoreEngineVarsStruct
 
 type NineSunsStoreEngine struct {
 	dataDir               string
@@ -36,28 +38,38 @@ type NineSunsStoreEngine struct {
 
 func NewNineSunsStoreEngine(ctx context.Context, dataDir string, initCallbackComponent *component.InitComponent, shutdownCallbackComponent *component.ShutdownComponent) StoreEngine {
 	onceForNineSunsStoreEngine.Do(func() {
-		if runtime.GOOS == "windows" {
-			lineBreak = "\r\n"
-		} else {
-			lineBreak = "\n"
+		nineSunsStoreEngineVars = &nineSunsStoreEngineVarsStruct{
+			dbFileSuffix:          "db",
+			dbFileLineKVSeparator: ",",
+			dbExistFileOpenFlag:   os.O_RDWR | os.O_APPEND,
+			dbCreateFileOpenFlag:  os.O_RDWR | os.O_APPEND | os.O_CREATE,
+			dbFilePermission:      os.FileMode(0644),
+			lineBreak:             "",
+			ninesunsStoreEngine:   &NineSunsStoreEngine{},
 		}
 
-		ninesunsStoreEngine = &NineSunsStoreEngine{
+		if runtime.GOOS == "windows" {
+			nineSunsStoreEngineVars.lineBreak = "\r\n"
+		} else {
+			nineSunsStoreEngineVars.lineBreak = "\n"
+		}
+
+		nineSunsStoreEngineVars.ninesunsStoreEngine = &NineSunsStoreEngine{
 			dataDir:               dataDir,
 			databasesMap:          &component.SyncMap[string, *entity.DatabaseEntity]{},
 			initCallbackComponent: initCallbackComponent,
 			shutdownComponent:     shutdownCallbackComponent,
 		}
 
-		ninesunsStoreEngine.initCallbackComponent.RegisterInitCallback(func(ctx context.Context) error {
-			return ninesunsStoreEngine.InitExistedDBs(ctx)
+		nineSunsStoreEngineVars.ninesunsStoreEngine.initCallbackComponent.RegisterInitCallback(func(ctx context.Context) error {
+			return nineSunsStoreEngineVars.ninesunsStoreEngine.InitExistedDBs(ctx)
 		})
 
-		ninesunsStoreEngine.shutdownComponent.RegisterShutdownCallback(func(ctx context.Context) error {
-			return ninesunsStoreEngine.Close(ctx)
+		nineSunsStoreEngineVars.ninesunsStoreEngine.shutdownComponent.RegisterShutdownCallback(func(ctx context.Context) error {
+			return nineSunsStoreEngineVars.ninesunsStoreEngine.Close(ctx)
 		})
 	})
-	return ninesunsStoreEngine
+	return nineSunsStoreEngineVars.ninesunsStoreEngine
 }
 
 func (s *NineSunsStoreEngine) CreateDB(ctx context.Context, db string) error {
@@ -69,8 +81,8 @@ func (s *NineSunsStoreEngine) CreateDB(ctx context.Context, db string) error {
 		}
 		s.databasesMap.Store(db, dbEntity)
 	}
-	dbFileName := db + "." + dbFileSuffix
-	dbFile, err := createFileInFolder(s.dataDir, dbFileName, dbCreateFileOpenFlag, dbFilePermission)
+	dbFileName := db + "." + nineSunsStoreEngineVars.dbFileSuffix
+	dbFile, err := createFileInFolder(s.dataDir, dbFileName, nineSunsStoreEngineVars.dbCreateFileOpenFlag, nineSunsStoreEngineVars.dbFilePermission)
 	if err != nil {
 		slog.ErrorContext(ctx, "create db file failed", slog.String("dataDir", s.dataDir), slog.String("dbFileName", dbFileName), slog.Any("error", err))
 		return err
@@ -98,7 +110,7 @@ func (s *NineSunsStoreEngine) ReadKey(ctx context.Context, dbName string, key st
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
-		kv := strings.SplitN(line, dbFileLineKVSeparator, 2)
+		kv := strings.SplitN(line, nineSunsStoreEngineVars.dbFileLineKVSeparator, 2)
 		if kv[0] == key {
 			lastV = kv[1]
 		}
@@ -116,7 +128,7 @@ func (s *NineSunsStoreEngine) WriteKeyValue(ctx context.Context, dbName string, 
 		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
 		return fmt.Errorf("db not found: %s", dbName)
 	}
-	_, err := dbEntity.DBFile.WriteString(key + dbFileLineKVSeparator + value + lineBreak)
+	_, err := dbEntity.DBFile.WriteString(key + nineSunsStoreEngineVars.dbFileLineKVSeparator + value + nineSunsStoreEngineVars.lineBreak)
 	if err != nil {
 		slog.ErrorContext(ctx, "append db file failed", slog.String("dbName", dbName))
 		return err
@@ -125,9 +137,9 @@ func (s *NineSunsStoreEngine) WriteKeyValue(ctx context.Context, dbName string, 
 }
 
 func (s *NineSunsStoreEngine) Close(ctx context.Context) error {
-	dbNames := ninesunsStoreEngine.databasesMap.Keys()
+	dbNames := nineSunsStoreEngineVars.ninesunsStoreEngine.databasesMap.Keys()
 	for _, dbName := range dbNames {
-		_ = ninesunsStoreEngine.CloseDBFile(ctx, dbName)
+		_ = nineSunsStoreEngineVars.ninesunsStoreEngine.CloseDBFile(ctx, dbName)
 	}
 	return nil
 }
@@ -203,7 +215,7 @@ func listDBFiles(ctx context.Context, dataDir string) ([]string, error) {
 
 func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity, error) {
 	dbFilePathElements := strings.Split(dataDir, ".")
-	if dbFilePathElements[len(dbFilePathElements)-1] != dbFileSuffix {
+	if dbFilePathElements[len(dbFilePathElements)-1] != nineSunsStoreEngineVars.dbFileSuffix {
 		slog.ErrorContext(ctx, "loading db by file failed", slog.String("dbFilePath", dataDir), slog.Any("error", "invalid db file name format"))
 		return nil, fmt.Errorf("invalid db file name format")
 	}
@@ -213,7 +225,7 @@ func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity
 	dbFileElements := strings.Split(dbFileName, ".")
 	dbName := dbFileElements[0]
 
-	dbFile, err := os.OpenFile(dataDir, dbExistFileOpenFlag, dbFilePermission)
+	dbFile, err := os.OpenFile(dataDir, nineSunsStoreEngineVars.dbExistFileOpenFlag, nineSunsStoreEngineVars.dbFilePermission)
 	if err != nil {
 		slog.ErrorContext(ctx, "open db file failed", slog.String("dbFile", dbFileName), slog.Any("error", err))
 		return nil, err
@@ -226,6 +238,6 @@ func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity
 }
 
 func loadDBByDBName(ctx context.Context, dataDir string, dbName string) (*entity.DatabaseEntity, error) {
-	dbFilePath := dataDir + string(os.PathSeparator) + dbName + "." + dbFileSuffix
+	dbFilePath := dataDir + string(os.PathSeparator) + dbName + "." + nineSunsStoreEngineVars.dbFileSuffix
 	return loadDBByDBFile(ctx, dbFilePath)
 }
