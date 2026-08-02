@@ -112,6 +112,8 @@ func (s *NineSunsStorageEngine) CreateIndex(ctx context.Context, db string, inde
 	indexEntity := &entity.IndexEntity{
 		Name:    index,
 		DBName:  db,
+		Type:    indexType,
+		Fields:  strings.Join(fields, nineSunsStorageEngineVars.dbIndexFieldsSeparator),
 		Indexes: &component.SyncMap[string, int64]{},
 	}
 	dbEntity.Indexes.Store(index, indexEntity)
