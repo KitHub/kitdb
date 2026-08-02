@@ -17,6 +17,8 @@ import (
 )
 
 type nineSunsStorageEngineVarsStruct struct {
+	// todo, replace default column with the real column name
+	dbDefaultColumnName    string
 	dbIndexFieldsSeparator string
 	dbFileSuffix           string
 	dbIndexFileSuffix      string
@@ -42,6 +44,7 @@ type NineSunsStorageEngine struct {
 func NewNineSunsStorageEngine(ctx context.Context, dataDir string, initCallbackComponent *component.InitComponent, shutdownCallbackComponent *component.ShutdownComponent) StorageEngine {
 	onceForNineSunsStorageEngine.Do(func() {
 		nineSunsStorageEngineVars = &nineSunsStorageEngineVarsStruct{
+			dbDefaultColumnName:    "key",
 			dbIndexFieldsSeparator: "-",
 			dbFileSuffix:           "db",
 			dbIndexFileSuffix:      "idx",
@@ -117,6 +120,13 @@ func (s *NineSunsStorageEngine) CreateIndex(ctx context.Context, db string, inde
 		Indexes: &component.SyncMap[string, int64]{},
 	}
 	dbEntity.Indexes.Store(index, indexEntity)
+
+	err := buildIndex(ctx, dbEntity, indexEntity)
+	if err != nil {
+		slog.ErrorContext(ctx, "build index failed", slog.String("db", db), slog.String("index", index), slog.Any("error", err))
+		return err
+	}
+
 	return nil
 }
 
@@ -127,7 +137,7 @@ func (s *NineSunsStorageEngine) ReadKey(ctx context.Context, dbName string, key 
 		return "", false, fmt.Errorf("db not found: %s", dbName)
 	}
 
-	indexEntity, ok := determineIndex(ctx, dbEntity, []string{key})
+	indexEntity, ok := determineIndex(ctx, dbEntity, []string{nineSunsStorageEngineVars.dbDefaultColumnName})
 	if ok {
 		v, ok, err := queryKeyByIndex(ctx, dbEntity, indexEntity, key)
 		if err != nil {
@@ -165,7 +175,7 @@ func (s *NineSunsStorageEngine) WriteKeyValue(ctx context.Context, dbName string
 		return err
 	}
 
-	err = updateIndex(ctx, dbEntity, []string{key}, value)
+	err = updateIndex(ctx, dbEntity, []string{nineSunsStorageEngineVars.dbDefaultColumnName}, value)
 	if err != nil {
 		slog.ErrorContext(ctx, "update index failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
 		return err
@@ -283,13 +293,18 @@ func loadDBByDBName(ctx context.Context, dataDir string, dbName string) (*entity
 }
 
 func updateIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, fields []string, value string) error {
-	_, ok := determineIndex(ctx, dbEntity, fields)
+	indexEntity, ok := determineIndex(ctx, dbEntity, fields)
 	if !ok {
 		slog.DebugContext(ctx, "index not found, skip updating index", slog.String("dbName", dbEntity.Name), slog.Any("fields", fields))
 		return nil
 	}
 
-	// todo, update index by reading db file and updating index file
+	// todo, update index without reading the whole file, just append the new key-value pair to the end of the index file
+	err := buildIndex(ctx, dbEntity, indexEntity)
+	if err != nil {
+		slog.ErrorContext(ctx, "build index failed", slog.String("dbName", dbEntity.Name), slog.String("indexName", indexEntity.Name), slog.Any("error", err))
+		return err
+	}
 	return nil
 }
 
@@ -320,10 +335,10 @@ func queryKeyByIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, index
 	pos, ok := indexEntity.Indexes.Load(key)
 	if !ok {
 		slog.ErrorContext(ctx, "index not found", slog.String("index", indexEntity.Name))
-		return "", false, fmt.Errorf("key not found in index: %s", key)
+		return "", false, nil
 	}
 
-	_, err = dbEntity.DBFile.Seek(pos+1, io.SeekStart) // +1 is for key-value separator
+	_, err = dbEntity.DBFile.Seek(pos+int64(len(key))+1, io.SeekStart) // +1 is for key-value separator
 	if err != nil {
 		slog.ErrorContext(ctx, "seek index pos in db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
 		return "", false, err
@@ -369,4 +384,46 @@ func queryKeyByReadingFile(ctx context.Context, dbEntity *entity.DatabaseEntity,
 		return "", false, err
 	}
 	return lastV, true, nil
+}
+
+func buildIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, indexEntity *entity.IndexEntity) (err error) {
+	var currentPos int64
+
+	defer func() {
+		slog.InfoContext(ctx, "build index done", slog.String("dbName", dbEntity.Name), slog.String("indexName", indexEntity.Name), slog.Any("error", err))
+
+		// recover pos in the file
+		_, seekErr := dbEntity.DBFile.Seek(currentPos, io.SeekStart)
+		if seekErr != nil {
+			slog.ErrorContext(ctx, "failed to recover file position", slog.String("dbName", dbEntity.Name), slog.Any("error", seekErr))
+		}
+	}()
+
+	currentPos, err = dbEntity.DBFile.Seek(0, io.SeekCurrent)
+	if err != nil {
+		slog.ErrorContext(ctx, "seek current pos in db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return err
+	}
+
+	_, err = dbEntity.DBFile.Seek(0, io.SeekStart)
+	if err != nil {
+		slog.ErrorContext(ctx, "seek start pos in db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return err
+	}
+
+	scanner := bufio.NewScanner(dbEntity.DBFile)
+	lineNum := 0
+	bytesRead := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		kv := strings.SplitN(line, nineSunsStorageEngineVars.dbFileLineKVSeparator, 2)
+		indexEntity.Indexes.Store(kv[0], int64(bytesRead))
+		bytesRead += len(line) + 1 // +1 for line break
+	}
+	if err := scanner.Err(); err != nil {
+		slog.ErrorContext(ctx, "scan db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
+		return err
+	}
+	return nil
 }

@@ -37,7 +37,8 @@ type TraceConfigEntity struct {
 }
 
 type DataConfigEntity struct {
-	Dir string `yaml:"dir"` // data dir
+	Dir         string `yaml:"dir"`          // data dir]
+	EnableCache bool   `yaml:"enable_cache"` // 是否启用缓存
 }
 
 type ConfigEntity struct {

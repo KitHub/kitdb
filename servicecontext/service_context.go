@@ -41,7 +41,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 			return
 		}
 
-		dataDir, innerErr := prepareDir(ctx, configEntity.DataConfig.Dir)
+		dataDir, innerErr := prepareDir(ctx, configEntity.DataConfig)
 		if innerErr != nil {
 			slog.ErrorContext(ctx, "resolve data dir failed", slog.Any("error", innerErr))
 			err = innerErr
@@ -52,7 +52,7 @@ func InitServiceContext(ctx context.Context, configEntity *config.ConfigEntity) 
 		initComponent := component.NewInitComponent(ctx)
 		shutdownComponent := component.NewShutdownComponent(ctx)
 		storeEngine := dao.NewNineSunsStorageEngine(ctx, dataDir, initComponent, shutdownComponent)
-		storeLogic := logic.NewStoreLogic(ctx, initComponent, storeEngine)
+		storeLogic := logic.NewStoreLogic(ctx, configEntity.DataConfig, initComponent, storeEngine)
 		storeService := service.NewStoreService(ctx, storeLogic)
 
 		gServiceCtx = &ServiceContext{
@@ -90,8 +90,11 @@ func GetServiceContext() *ServiceContext {
 	return gServiceCtx
 }
 
-func prepareDir(ctx context.Context, dirPath string) (string, error) {
+func prepareDir(ctx context.Context, dataConfig *config.DataConfigEntity) (string, error) {
+	var dirPath string
 	var fullPath string
+
+	dirPath = dataConfig.Dir
 
 	isAbs := filepath.IsAbs(dirPath)
 	if !isAbs {

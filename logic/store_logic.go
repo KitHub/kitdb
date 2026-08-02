@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/KitHub/kitdb/component"
+	"github.com/KitHub/kitdb/config"
 	"github.com/KitHub/kitdb/dao"
 	"github.com/KitHub/protocols/kitdb"
 )
@@ -15,14 +16,16 @@ var storeLogic *StoreLogic
 var onceStoreLogic sync.Once
 
 type StoreLogic struct {
+	dataConfig    *config.DataConfigEntity
 	dataCaches    *component.SyncMap[string, *component.SyncMap[string, string]] // key = dbName
 	storageEngine dao.StorageEngine
 	initComponent *component.InitComponent
 }
 
-func NewStoreLogic(ctx context.Context, initComponent *component.InitComponent, storageEngine dao.StorageEngine) *StoreLogic {
+func NewStoreLogic(ctx context.Context, dataConfig *config.DataConfigEntity, initComponent *component.InitComponent, storageEngine dao.StorageEngine) *StoreLogic {
 	onceStoreLogic.Do(func() {
 		storeLogic = &StoreLogic{
+			dataConfig:    dataConfig,
 			initComponent: initComponent,
 			dataCaches:    &component.SyncMap[string, *component.SyncMap[string, string]]{},
 			storageEngine: storageEngine,
@@ -36,24 +39,29 @@ func NewStoreLogic(ctx context.Context, initComponent *component.InitComponent, 
 
 func (s *StoreLogic) ReadKey(ctx context.Context, dbName string, key string) (string, bool, error) {
 	slog.DebugContext(ctx, "read key", slog.String("db", dbName), slog.String("key", key))
-	dbCache, ok := s.dataCaches.Load(dbName)
-	if !ok {
-		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
-		return "", false, fmt.Errorf("db not found: %s", dbName)
+	value, ok, err := readFromCache(ctx, s.dataConfig, s.dataCaches, dbName, key)
+	if err != nil {
+		slog.ErrorContext(ctx, "read from cache failed", slog.String("db", dbName), slog.String("key", key), slog.Any("error", err))
+		return "", false, fmt.Errorf("read from cache failed")
 	}
 
-	value, ok := dbCache.Load(key)
-	if !ok {
-		value, ok, err := queryFromStorageEngine(ctx, s.storageEngine, dbName, key)
-		if err != nil {
-			slog.ErrorContext(ctx, "query from db file failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
-			return "", false, fmt.Errorf("query from db failed")
-		}
-		if !ok {
-			return "", false, nil
-		}
-		dbCache.Store(key, value)
+	if ok {
 		return value, true, nil
+	}
+
+	value, ok, err = queryFromStorageEngine(ctx, s.storageEngine, dbName, key)
+	if err != nil {
+		slog.ErrorContext(ctx, "query from db file failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
+		return "", false, fmt.Errorf("query from db failed")
+	}
+	if !ok {
+		return "", false, nil
+	}
+
+	err = writeToCache(ctx, s.dataConfig, s.dataCaches, dbName, key, value)
+	if err != nil {
+		slog.ErrorContext(ctx, "write to cache failed", slog.String("db", dbName), slog.String("key", key), slog.String("value", value), slog.Any("error", err))
+		return "", false, fmt.Errorf("write to cache failed")
 	}
 
 	slog.DebugContext(ctx, "read key done", slog.String("db", dbName), slog.String("key", key), slog.String("value", value))
@@ -123,4 +131,44 @@ func (s *StoreLogic) InitDBs(ctx context.Context) error {
 // private functions =================================================
 func queryFromStorageEngine(ctx context.Context, storageEngine dao.StorageEngine, dbName string, key string) (value string, ok bool, err error) {
 	return storageEngine.ReadKey(ctx, dbName, key)
+}
+
+func readFromCache(ctx context.Context, dataConfig *config.DataConfigEntity, dataCaches *component.SyncMap[string, *component.SyncMap[string, string]], dbName string, key string) (value string, ok bool, err error) {
+	defer slog.DebugContext(ctx, "read from cache done", slog.String("db", dbName), slog.String("key", key), slog.String("value", value), slog.Bool("ok", ok))
+
+	if !dataConfig.EnableCache {
+		slog.DebugContext(ctx, "data cached disabled")
+		return "", false, nil
+	}
+
+	dbCache, ok := dataCaches.Load(dbName)
+	if !ok {
+		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
+		return "", false, fmt.Errorf("db not found: %s", dbName)
+	}
+
+	value, ok = dbCache.Load(key)
+	if ok {
+		return value, true, nil
+	}
+
+	return "", false, nil
+}
+
+func writeToCache(ctx context.Context, dataConfig *config.DataConfigEntity, dataCaches *component.SyncMap[string, *component.SyncMap[string, string]], dbName string, key string, value string) (err error) {
+	defer slog.DebugContext(ctx, "write to cache done", slog.String("db", dbName), slog.String("key", key), slog.String("value", value), slog.Any("error", err))
+
+	if !dataConfig.EnableCache {
+		slog.DebugContext(ctx, "data cached disabled")
+		return nil
+	}
+
+	dbCache, ok := dataCaches.Load(dbName)
+	if !ok {
+		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
+		return fmt.Errorf("db not found: %s", dbName)
+	}
+
+	dbCache.Store(key, value)
+	return nil
 }
