@@ -10,13 +10,14 @@ import (
 type DatabaseEntity struct {
 	Name    string
 	DBFile  *os.File
-	Indexes *component.SyncMap[string, *IndexEntity] // key=indexName
+	Indices *component.SyncMap[string, *IndexEntity] // key=indexName
 }
 
 type IndexEntity struct {
-	Name    string
-	DBName  string
-	Type    kitdb.IndexType
-	Fields  string                            // fields are separated by "-"
-	Indexes *component.SyncMap[string, int64] // key=key, value=position
+	Name      string                            `json:"name"`
+	DBName    string                            `json:"db_name"`
+	Type      kitdb.IndexType                   `json:"type"`
+	Fields    string                            `json:"fields"` // fields are separated by "-"
+	Data      *component.SyncMap[string, int64] `json:"data"`   // key=key, value=position
+	IndexFile *os.File
 }

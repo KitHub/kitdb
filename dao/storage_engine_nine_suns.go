@@ -3,6 +3,7 @@ package dao
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,16 +19,16 @@ import (
 
 type nineSunsStorageEngineVarsStruct struct {
 	// todo, replace default column with the real column name
-	dbDefaultColumnName    string
-	dbIndexFieldsSeparator string
-	dbFileSuffix           string
-	dbIndexFileSuffix      string
-	dbFileLineKVSeparator  string
-	dbExistFileOpenFlag    int
-	dbCreateFileOpenFlag   int
-	dbFilePermission       os.FileMode
-	lineBreak              byte
-	ninesunsStorageEngine  *NineSunsStorageEngine
+	defaultColumnName     string
+	indexColumnsSeparator string
+	dbFileSuffix          string
+	indexFileSuffix       string
+	dbFileLineKVSeparator string
+	existFileOpenFlag     int
+	newFileOpenFlag       int
+	filePermission        os.FileMode
+	lineBreak             byte
+	ninesunsStorageEngine *NineSunsStorageEngine
 }
 
 var onceForNineSunsStorageEngine sync.Once = sync.Once{}
@@ -44,16 +45,16 @@ type NineSunsStorageEngine struct {
 func NewNineSunsStorageEngine(ctx context.Context, dataDir string, initCallbackComponent *component.InitComponent, shutdownCallbackComponent *component.ShutdownComponent) StorageEngine {
 	onceForNineSunsStorageEngine.Do(func() {
 		nineSunsStorageEngineVars = &nineSunsStorageEngineVarsStruct{
-			dbDefaultColumnName:    "key",
-			dbIndexFieldsSeparator: "-",
-			dbFileSuffix:           "db",
-			dbIndexFileSuffix:      "idx",
-			dbFileLineKVSeparator:  ",",
-			dbExistFileOpenFlag:    os.O_RDWR,
-			dbCreateFileOpenFlag:   os.O_RDWR | os.O_CREATE,
-			dbFilePermission:       os.FileMode(0644),
-			lineBreak:              '\n',
-			ninesunsStorageEngine:  &NineSunsStorageEngine{},
+			defaultColumnName:     "key",
+			indexColumnsSeparator: "-",
+			dbFileSuffix:          "db",
+			indexFileSuffix:       "idx",
+			dbFileLineKVSeparator: ",",
+			existFileOpenFlag:     os.O_RDWR,
+			newFileOpenFlag:       os.O_RDWR | os.O_CREATE,
+			filePermission:        os.FileMode(0644),
+			lineBreak:             '\n',
+			ninesunsStorageEngine: &NineSunsStorageEngine{},
 		}
 
 		nineSunsStorageEngineVars.ninesunsStorageEngine = &NineSunsStorageEngine{
@@ -80,12 +81,12 @@ func (s *NineSunsStorageEngine) CreateDB(ctx context.Context, db string) error {
 		dbEntity = &entity.DatabaseEntity{
 			Name:    db,
 			DBFile:  nil,
-			Indexes: &component.SyncMap[string, *entity.IndexEntity]{},
+			Indices: &component.SyncMap[string, *entity.IndexEntity]{},
 		}
 		s.databasesMap.Store(db, dbEntity)
 	}
 	dbFileName := db + "." + nineSunsStorageEngineVars.dbFileSuffix
-	dbFile, err := createFileInFolder(s.dataDir, dbFileName, nineSunsStorageEngineVars.dbCreateFileOpenFlag, nineSunsStorageEngineVars.dbFilePermission)
+	dbFile, err := createFileInFolder(ctx, s.dataDir, dbFileName, nineSunsStorageEngineVars.newFileOpenFlag, nineSunsStorageEngineVars.filePermission)
 	if err != nil {
 		slog.ErrorContext(ctx, "create db file failed", slog.String("dataDir", s.dataDir), slog.String("dbFileName", dbFileName), slog.Any("error", err))
 		return err
@@ -107,25 +108,34 @@ func (s *NineSunsStorageEngine) CreateIndex(ctx context.Context, db string, inde
 		slog.ErrorContext(ctx, "db not found", slog.String("db", db))
 		return fmt.Errorf("db not found: %s", db)
 	}
-	_, ok = dbEntity.Indexes.Load(index)
+	_, ok = dbEntity.Indices.Load(index)
 	if ok {
 		slog.ErrorContext(ctx, "index already existed", slog.String("index", index))
 		return fmt.Errorf("index already existed: %s", index)
 	}
 	indexEntity := &entity.IndexEntity{
-		Name:    index,
-		DBName:  db,
-		Type:    indexType,
-		Fields:  strings.Join(fields, nineSunsStorageEngineVars.dbIndexFieldsSeparator),
-		Indexes: &component.SyncMap[string, int64]{},
+		Name:   index,
+		DBName: db,
+		Type:   indexType,
+		Fields: strings.Join(fields, nineSunsStorageEngineVars.indexColumnsSeparator),
+		Data:   &component.SyncMap[string, int64]{},
 	}
-	dbEntity.Indexes.Store(index, indexEntity)
+	dbEntity.Indices.Store(index, indexEntity)
 
 	err := buildIndex(ctx, dbEntity, indexEntity)
 	if err != nil {
 		slog.ErrorContext(ctx, "build index failed", slog.String("db", db), slog.String("index", index), slog.Any("error", err))
 		return err
 	}
+
+	// create index file for persistence
+	indexFileName := dbEntity.Name + "." + index + "." + nineSunsStorageEngineVars.indexFileSuffix
+	indexFile, err := createFileInFolder(ctx, s.dataDir, indexFileName, nineSunsStorageEngineVars.newFileOpenFlag, nineSunsStorageEngineVars.filePermission)
+	if err != nil {
+		slog.ErrorContext(ctx, "create index file failed", slog.Any("index", indexEntity), slog.String("dataDir", s.dataDir), slog.String("indexFile", indexFileName), slog.Any("error", err))
+		return err
+	}
+	indexEntity.IndexFile = indexFile
 
 	return nil
 }
@@ -137,7 +147,7 @@ func (s *NineSunsStorageEngine) ReadKey(ctx context.Context, dbName string, key 
 		return "", false, fmt.Errorf("db not found: %s", dbName)
 	}
 
-	indexEntity, ok := determineIndex(ctx, dbEntity, []string{nineSunsStorageEngineVars.dbDefaultColumnName})
+	indexEntity, ok := determineIndex(ctx, dbEntity, []string{nineSunsStorageEngineVars.defaultColumnName})
 	if ok {
 		v, ok, err := queryKeyByIndex(ctx, dbEntity, indexEntity, key)
 		if err != nil {
@@ -175,7 +185,7 @@ func (s *NineSunsStorageEngine) WriteKeyValue(ctx context.Context, dbName string
 		return err
 	}
 
-	err = updateIndex(ctx, dbEntity, []string{nineSunsStorageEngineVars.dbDefaultColumnName}, value)
+	err = updateIndex(ctx, dbEntity, []string{nineSunsStorageEngineVars.defaultColumnName}, value)
 	if err != nil {
 		slog.ErrorContext(ctx, "update index failed", slog.String("dbName", dbName), slog.String("key", key), slog.Any("error", err))
 		return err
@@ -185,27 +195,71 @@ func (s *NineSunsStorageEngine) WriteKeyValue(ctx context.Context, dbName string
 }
 
 func (s *NineSunsStorageEngine) Close(ctx context.Context) error {
-	dbNames := nineSunsStorageEngineVars.ninesunsStorageEngine.databasesMap.Keys()
-	for _, dbName := range dbNames {
-		_ = nineSunsStorageEngineVars.ninesunsStorageEngine.CloseDBFile(ctx, dbName)
-	}
+	var err error
+
+	nineSunsStorageEngineVars.ninesunsStorageEngine.databasesMap.Range(func(dbName string, db *entity.DatabaseEntity) bool {
+		// close db file
+		err = s.CloseDB(ctx, db)
+		if err != nil {
+			return false
+		}
+
+		// close index files
+		db.Indices.Range(func(indexName string, index *entity.IndexEntity) bool {
+			errForCloseIndex := s.CloseIndex(ctx, index)
+			return errForCloseIndex == nil
+		})
+		return true
+	})
 	return nil
 }
 
 func (s *NineSunsStorageEngine) InitExistedDBs(ctx context.Context) error {
-	dbFiles, err := listDBFiles(ctx, s.dataDir)
+	dbFilePaths, err := listDBFiles(ctx, s.dataDir)
 	if err != nil {
 		slog.ErrorContext(ctx, "list db files failed", slog.Any("error", err))
 		return err
 	}
 
-	for _, dbFile := range dbFiles {
-		databaseEntity, err := loadDBByDBFile(ctx, dbFile)
-		if err != nil {
-			slog.ErrorContext(ctx, "load db failed", slog.String("dbFile", dbFile), slog.Any("error", err))
-			return err
+	// load db
+	for _, dbFilePath := range dbFilePaths {
+		dbFilePathElements := strings.Split(dbFilePath, ".")
+		fileSuffix := dbFilePathElements[len(dbFilePathElements)-1]
+		switch fileSuffix {
+		case nineSunsStorageEngineVars.dbFileSuffix:
+			databaseEntity, err := loadDBByDBFile(ctx, dbFilePath)
+			if err != nil {
+				slog.ErrorContext(ctx, "load db failed", slog.String("dbFilePath", dbFilePath), slog.Any("error", err))
+				return err
+			}
+			s.databasesMap.Store(databaseEntity.Name, databaseEntity)
+		default:
+			slog.DebugContext(ctx, "unsupported file suffix", slog.String("fileSuffix", fileSuffix))
+			continue
 		}
-		s.databasesMap.Store(databaseEntity.Name, databaseEntity)
+
+	}
+
+	// load index
+	for _, dbFilePath := range dbFilePaths {
+		dbFilePathElements := strings.Split(dbFilePath, ".")
+		fileSuffix := dbFilePathElements[len(dbFilePathElements)-1]
+		switch fileSuffix {
+		case nineSunsStorageEngineVars.indexFileSuffix:
+			indexEntity, err := loadIndexByIndexFile(ctx, dbFilePath)
+			if err != nil {
+				slog.ErrorContext(ctx, "load index failed", slog.String("indexFilePath", dbFilePath), slog.Any("error", err))
+				return err
+			}
+			databaseEntity, ok := s.databasesMap.Load(indexEntity.DBName)
+			if !ok {
+				slog.ErrorContext(ctx, "db not found for index", slog.Any("indexEntity", indexEntity))
+				return fmt.Errorf("db not found for index: %s", indexEntity.DBName)
+			}
+			databaseEntity.Indices.Store(indexEntity.Name, indexEntity)
+		default:
+			continue
+		}
 	}
 
 	slog.InfoContext(ctx, "loading all dbs done")
@@ -216,24 +270,36 @@ func (s *NineSunsStorageEngine) GetDBNames(ctx context.Context) ([]string, error
 	return s.databasesMap.Keys(), nil
 }
 
-func (s *NineSunsStorageEngine) CloseDBFile(ctx context.Context, dbName string) error {
-	dbEntity, ok := s.databasesMap.Load(dbName)
-	if !ok {
-		slog.ErrorContext(ctx, "db not found", slog.String("dbName", dbName))
-		return fmt.Errorf("db not found: %s", dbName)
-	}
-	err := dbEntity.DBFile.Close()
+func (s *NineSunsStorageEngine) CloseDB(ctx context.Context, databaseEntity *entity.DatabaseEntity) error {
+	err := databaseEntity.DBFile.Close()
 	if err != nil {
-		slog.ErrorContext(ctx, "close db file failed", slog.String("dbName", dbName), slog.Any("error", err))
+		slog.ErrorContext(ctx, "close db file failed", slog.String("db", databaseEntity.Name), slog.Any("error", err))
 		return err
 	}
+	slog.InfoContext(ctx, "close db done", slog.String("db", databaseEntity.Name))
+	return nil
+}
+
+func (s *NineSunsStorageEngine) CloseIndex(ctx context.Context, indexEntity *entity.IndexEntity) error {
+	// serialize index data to file
+	err := serializeDatabaseIndexToDisk(ctx, indexEntity)
+	if err != nil {
+		return err
+	}
+
+	err = indexEntity.IndexFile.Close()
+	if err != nil {
+		slog.ErrorContext(ctx, "close index file failed", slog.String("index", indexEntity.Name), slog.Any("error", err))
+		return err
+	}
+	slog.InfoContext(ctx, "close index done", slog.String("index", indexEntity.Name))
 	return nil
 }
 
 // private functions ================================================================
 
 // createFileInFolder
-func createFileInFolder(folder string, filename string, openFileFlag int, openFilePerm os.FileMode) (*os.File, error) {
+func createFileInFolder(ctx context.Context, folder string, filename string, openFileFlag int, openFilePerm os.FileMode) (*os.File, error) {
 	fullPath := filepath.Join(folder, filename)
 	return os.OpenFile(fullPath, openFileFlag, openFilePerm)
 }
@@ -261,20 +327,19 @@ func listDBFiles(ctx context.Context, dataDir string) ([]string, error) {
 	return retval, nil
 }
 
-func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity, error) {
-	// todo, load db and index
-	dbFilePathElements := strings.Split(dataDir, ".")
-	if dbFilePathElements[len(dbFilePathElements)-1] != nineSunsStorageEngineVars.dbFileSuffix {
-		slog.ErrorContext(ctx, "loading db by file failed", slog.String("dbFilePath", dataDir), slog.Any("error", "invalid db file name format"))
+func loadDBByDBFile(ctx context.Context, dbFilePath string) (*entity.DatabaseEntity, error) {
+	pathElements := strings.Split(dbFilePath, string(os.PathSeparator))
+	dbFileName := pathElements[len(pathElements)-1]
+
+	dbFileNameElements := strings.Split(dbFileName, ".")
+	if len(dbFileNameElements) != 2 || dbFileNameElements[1] != nineSunsStorageEngineVars.dbFileSuffix {
+		slog.ErrorContext(ctx, "loading db by file failed", slog.String("dbFilePath", dbFilePath), slog.Any("error", "invalid db file name format"))
 		return nil, fmt.Errorf("invalid db file name format")
 	}
 
-	pathElements := strings.Split(dataDir, string(os.PathSeparator))
-	dbFileName := pathElements[len(pathElements)-1]
-	dbFileElements := strings.Split(dbFileName, ".")
-	dbName := dbFileElements[0]
+	dbName := dbFileNameElements[0]
 
-	dbFile, err := os.OpenFile(dataDir, nineSunsStorageEngineVars.dbExistFileOpenFlag, nineSunsStorageEngineVars.dbFilePermission)
+	dbFile, err := os.OpenFile(dbFilePath, nineSunsStorageEngineVars.existFileOpenFlag, nineSunsStorageEngineVars.filePermission)
 	if err != nil {
 		slog.ErrorContext(ctx, "open db file failed", slog.String("dbFile", dbFileName), slog.Any("error", err))
 		return nil, err
@@ -282,7 +347,7 @@ func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity
 	databaseEntity := &entity.DatabaseEntity{
 		Name:    dbName,
 		DBFile:  dbFile,
-		Indexes: &component.SyncMap[string, *entity.IndexEntity]{},
+		Indices: &component.SyncMap[string, *entity.IndexEntity]{},
 	}
 	return databaseEntity, nil
 }
@@ -290,6 +355,62 @@ func loadDBByDBFile(ctx context.Context, dataDir string) (*entity.DatabaseEntity
 func loadDBByDBName(ctx context.Context, dataDir string, dbName string) (*entity.DatabaseEntity, error) {
 	dbFilePath := dataDir + string(os.PathSeparator) + dbName + "." + nineSunsStorageEngineVars.dbFileSuffix
 	return loadDBByDBFile(ctx, dbFilePath)
+}
+
+func loadIndexByIndexFile(ctx context.Context, indexFilePath string) (*entity.IndexEntity, error) {
+	pathElements := strings.Split(indexFilePath, string(os.PathSeparator))
+	indexFileName := pathElements[len(pathElements)-1]
+
+	indexFilePathElements := strings.Split(indexFileName, ".")
+	if len(indexFilePathElements) != 3 || indexFilePathElements[2] != nineSunsStorageEngineVars.indexFileSuffix {
+		slog.ErrorContext(ctx, "loading index by file failed", slog.String("indexFilePath", indexFilePath), slog.Any("error", "invalid index file name format"))
+		return nil, fmt.Errorf("invalid index file name format")
+	}
+
+	dbName := indexFilePathElements[0]
+	indexName := indexFilePathElements[1]
+
+	indexFile, err := os.OpenFile(indexFilePath, nineSunsStorageEngineVars.existFileOpenFlag, nineSunsStorageEngineVars.filePermission)
+	if err != nil {
+		slog.ErrorContext(ctx, "open index file failed", slog.String("indexFile", indexFileName), slog.Any("error", err))
+		return nil, err
+	}
+
+	var indexData []byte
+	buf := make([]byte, 1024)
+	for {
+		n, err := indexFile.Read(buf)
+		if n > 0 {
+			indexData = append(indexData, buf[:n]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			slog.ErrorContext(ctx, "read index file failed", slog.String("indexFile", indexFileName), slog.Any("error", err))
+			return nil, err
+		}
+	}
+	indexEntity := &entity.IndexEntity{}
+	err = json.Unmarshal(indexData, indexEntity)
+	if err != nil {
+		slog.ErrorContext(ctx, "unmarshal index data failed", slog.String("indexFile", indexFileName), slog.Any("error", err))
+		return nil, err
+	}
+
+	if indexEntity.Name != indexName {
+		slog.ErrorContext(ctx, "read index file failed, index name mismatched", slog.String("indexFile", indexFileName), slog.Any("indexNameInData", indexEntity.Name))
+		return nil, err
+	}
+	if indexEntity.DBName != dbName {
+		slog.ErrorContext(ctx, "read index file failed, db name mismatched", slog.String("indexFile", indexFileName), slog.Any("dbNameInData", indexEntity.DBName))
+		return nil, err
+	}
+
+	indexEntity.IndexFile = indexFile
+
+	slog.InfoContext(ctx, "load index file done", slog.String("indexFilePath", indexFilePath))
+	return indexEntity, nil
 }
 
 func updateIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, fields []string, value string) error {
@@ -309,9 +430,9 @@ func updateIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, fields []
 }
 
 func determineIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, fields []string) (index *entity.IndexEntity, ok bool) {
-	fieldsJoined := strings.Join(fields, nineSunsStorageEngineVars.dbIndexFieldsSeparator)
-	for _, tmpIndex := range dbEntity.Indexes.Keys() {
-		tmpIndexEntity, ok := dbEntity.Indexes.Load(tmpIndex)
+	fieldsJoined := strings.Join(fields, nineSunsStorageEngineVars.indexColumnsSeparator)
+	for _, tmpIndex := range dbEntity.Indices.Keys() {
+		tmpIndexEntity, ok := dbEntity.Indices.Load(tmpIndex)
 		if !ok {
 			slog.ErrorContext(ctx, "index not found", slog.String("index", tmpIndex))
 			return nil, false
@@ -332,7 +453,7 @@ func queryKeyByIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, index
 		return "", false, err
 	}
 
-	pos, ok := indexEntity.Indexes.Load(key)
+	pos, ok := indexEntity.Data.Load(key)
 	if !ok {
 		slog.ErrorContext(ctx, "index not found", slog.String("index", indexEntity.Name))
 		return "", false, nil
@@ -418,12 +539,36 @@ func buildIndex(ctx context.Context, dbEntity *entity.DatabaseEntity, indexEntit
 		lineNum++
 		line := scanner.Text()
 		kv := strings.SplitN(line, nineSunsStorageEngineVars.dbFileLineKVSeparator, 2)
-		indexEntity.Indexes.Store(kv[0], int64(bytesRead))
+		indexEntity.Data.Store(kv[0], int64(bytesRead))
 		bytesRead += len(line) + 1 // +1 for line break
 	}
 	if err := scanner.Err(); err != nil {
 		slog.ErrorContext(ctx, "scan db file failed", slog.String("dbName", dbEntity.Name), slog.Any("error", err))
 		return err
 	}
+	return nil
+}
+
+func serializeDatabaseIndexToDisk(ctx context.Context, indexEntity *entity.IndexEntity) error {
+	// todo, upgrade serialization in case of big index data
+	bytes, err := json.Marshal(indexEntity)
+	if err != nil {
+		slog.ErrorContext(ctx, "serialize index failed", slog.Any("index", indexEntity), slog.Any("error", err))
+		return err
+	}
+
+	// overwrite the whole file
+	_, err = indexEntity.IndexFile.Seek(0, io.SeekStart)
+	if err != nil {
+		slog.ErrorContext(ctx, "seek index file pos to start failed", slog.Any("indexEntity", indexEntity), slog.Any("error", err))
+		return err
+	}
+
+	n, err := indexEntity.IndexFile.Write(bytes)
+	if err != nil {
+		slog.ErrorContext(ctx, "write index data to file failed", slog.Any("index", indexEntity), slog.Any("error", err))
+		return err
+	}
+	slog.ErrorContext(ctx, "serialize index to file done", slog.Any("index", indexEntity), slog.Any("bytesCount", n))
 	return nil
 }
